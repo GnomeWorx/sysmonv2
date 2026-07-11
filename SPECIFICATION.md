@@ -53,20 +53,35 @@ All data is read directly from Linux sysfs, /proc, and process execution — no 
 - **DIMM temps**: hwmon name=`spd5118`, first instance = DIMM A, second = DIMM B
 - **Ethernet temp**: hwmon name matches `r8169`, temp1_input
 - **GPU usage**: Currently reads from amdgpu voltage/power (placeholder — full GPU usage needs NVML when eGPU attached)
+|- **GPU usage**: Currently reads from amdgpu voltage/power (placeholder — full GPU usage needs NVML when eGPU attached). See HANDOVER_SYSMONV2.md for details on NVIDIA iGPU VRAM and M780 placeholder.
 
 ## Building
-
 ```bash
 # Dependencies
-sudo apt-get install build-essential cmake qt5-default qtbase5-dev
+sudo apt-get install build-essential cmake qt5-default qtbase5-dev libnvidia-compute-*.dev (for NVML)
 
 # Build
-cd sysmonv2/build
-cmake ..
-make -j$(nproc)
+cd sysmonv2/build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
 
 # Run
 ./sysmonv2
+```
+
+## API Extensions — SteamGauge.h public methods for custom gauges (see HANDOVER_SYSMONV2.md, clock section):
+
+- `setArc(degStart, degSpan)` — set dial arc range and span. Clock gauge uses 270° start to ~189° span
+- `setAnimDuration(ms)` — needle animation duration; use 0ms for instant sweep like clock second hand
+- `setNeedleBaseWidth(ratio)` — needle base relative to dial width (clock = thin, approx ratio=4) or specify absolute e.g. 3mm by drawing with QTransform scale/rotate instead of standard tapered shape
+
+## API Extensions — SteamGauge.h internal/public additions for clock gauge:
+
+- `drawClockBezel()` — custom silver brushed-metal bezel (bevel gradient centered at top, then bottom highlight)
+- `setTertiaryValue(double)` — hour hand value; draws as a shorter dark brass needle rotated independently from the minute/second needles. See SYSTEMMONITORV2.cpp: m_secondGauge->setTertiaryValue(m_clockHour).
+
+## Project Files (4 modified in this commit):
+
+### SystemMonitorV2.h
+- Added public members:  `m_nvGpuUsage      // NVIDIA GPU util%   \n    std::string              m_gpuStatus;        // "OK"/"BUSY"... etc\n`
 ```
 
 ## Project Structure

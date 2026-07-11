@@ -12,6 +12,8 @@
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QGraphicsDropShadowEffect>
+#include <QDateTime>
+#include <QTime>
 #include <unistd.h>
 #include <cmath>
 #include <algorithm>
@@ -25,7 +27,7 @@ SystemMonitorV2::SystemMonitorV2(QWidget *parent)
 
     m_tickTimer = new QTimer(this);
     connect(m_tickTimer, &QTimer::timeout, this, &SystemMonitorV2::tick);
-    m_tickTimer->start(1000);
+    m_tickTimer->start(250);   // 250ms for sweeping second hand
 
     // Read RAM total once
     QFile fp("/proc/meminfo");
@@ -126,72 +128,77 @@ void SystemMonitorV2::setupUI() {
     }
     mainLayout->addWidget(rivetRow);
 
+    // ── Clock row (full width, above gauge grid) ──
+    auto *clockRow = new QWidget();
+    auto *clockLay = new QHBoxLayout(clockRow);
+    clockLay->setContentsMargins(0, 0, 0, 0);
+    m_clockGauge = new SteamGauge("CLOCK", "HMS", 0, 60, 61);
+    m_clockGauge->setArc(270.0, 360.0);
+    m_clockGauge->setAnimDuration(0);
+    m_clockGauge->setNeedleBaseWidth(0.02);
+    m_clockGauge->setSubtitle("");
+    m_clockGauge->setFixedHeight(220);
+    clockLay->addWidget(m_clockGauge, 1);
+    mainLayout->addWidget(clockRow);
+
     // ── Gauge grid (3 rows × 4 cols) ──
     auto *gaugeGrid = new QGridLayout();
     gaugeGrid->setSpacing(5);
 
-    // Row 0: Performance gauges (the original 4)
-    // CPU usage %
+    // Row 0: CPU & core
     m_cpuGauge = new SteamGauge("CPU", "%", 0, 100, 80);
     m_cpuGauge->setSubtitle("-- %");
     gaugeGrid->addWidget(m_cpuGauge, 0, 0);
 
-    // GPU usage % (Radeon 780M iGPU)
-    m_gpuGauge = new SteamGauge("GPU", "%", 0, 100, 80);
-    m_gpuGauge->setSubtitle("-- %");
-    gaugeGrid->addWidget(m_gpuGauge, 0, 1);
+    m_cpuTempGauge = new SteamGauge("CPU TEMP", "°C", 0, 100, 80);
+    m_cpuTempGauge->setSubtitle("--°C");
+    gaugeGrid->addWidget(m_cpuTempGauge, 0, 1);
 
-    // RAM usage (GB)
     m_ramGauge = new SteamGauge("RAM", "GB", 0, 64, 51);
     m_ramGauge->setSubtitle("-- / -- GB");
     gaugeGrid->addWidget(m_ramGauge, 0, 2);
 
-    // CPU die temp (k10temp Tctl)
-    m_cpuTempGauge = new SteamGauge("CPU TEMP", "°C", 0, 100, 80);
-    m_cpuTempGauge->setSubtitle("--°C");
-    gaugeGrid->addWidget(m_cpuTempGauge, 0, 3);
-
-    // Row 1: Network + storage temp
-    // WAN internet speed
-    m_wanGauge = new SteamGauge("WAN", "Mbps", 0, 100, 80);
-    m_wanGauge->setSubtitle("↓ --  ↑ --");
-    gaugeGrid->addWidget(m_wanGauge, 1, 0);
-
-    // LAN local speed
-    m_lanGauge = new SteamGauge("LAN", "Mbps", 0, 100, 80);
-    m_lanGauge->setSubtitle("↓ --  ↑ --");
-    gaugeGrid->addWidget(m_lanGauge, 1, 1);
-
-    // NVMe boot SSD temp
-    m_nvmeTempGauge = new SteamGauge("NVME", "°C", 0, 100, 80);
-    m_nvmeTempGauge->setSubtitle("--°C");
-    gaugeGrid->addWidget(m_nvmeTempGauge, 1, 2);
-
-    // iGPU (Radeon 780M) edge temp
-    m_igpuTempGauge = new SteamGauge("IGPU TEMP", "°C", 0, 100, 80);
-    m_igpuTempGauge->setSubtitle("--°C");
-    gaugeGrid->addWidget(m_igpuTempGauge, 1, 3);
-
-    // Row 2: Enclosure / peripheral temps
-    // ACPI chassis temp (acpitz)
     m_chassisGauge = new SteamGauge("CHASSIS", "°C", 0, 50, 40);
     m_chassisGauge->setSubtitle("--°C");
-    gaugeGrid->addWidget(m_chassisGauge, 2, 0);
+    gaugeGrid->addWidget(m_chassisGauge, 0, 3);
 
-    // RAM stick A temp (SPD5118 DIMM A)
+    // Row 1: iGPU (Radeon 780M)
+    m_gpuGauge = new SteamGauge("M780 PERF", "%", 0, 100, 80);
+    m_gpuGauge->setSubtitle("-- %");
+    gaugeGrid->addWidget(m_gpuGauge, 1, 0);
+
+    m_igpuTempGauge = new SteamGauge("M780 TEMP", "°C", 0, 100, 80);
+    m_igpuTempGauge->setSubtitle("--°C");
+    gaugeGrid->addWidget(m_igpuTempGauge, 1, 1);
+
+    m_gpuVramGauge = new SteamGauge("M780 VRAM", "GB", 0, 8, 7);
+    m_gpuVramGauge->setSubtitle("-- GB");
+    gaugeGrid->addWidget(m_gpuVramGauge, 1, 2);
+
+    m_nvmeTempGauge = new SteamGauge("NVME TEMP", "°C", 0, 100, 80);
+    m_nvmeTempGauge->setSubtitle("--°C");
+    gaugeGrid->addWidget(m_nvmeTempGauge, 1, 3);
+
+    // Row 2: Network + RAM sticks
+    m_wanGauge = new SteamGauge("WAN", "Mbps", 0, 1000, 800);
+    m_wanGauge->setSubtitle("↓ --  ↑ --");
+    m_wanGauge->setBezelColor(QColor(30, 100, 200));
+    m_wanGauge->setNeedleColor(QColor(80, 160, 255));
+    gaugeGrid->addWidget(m_wanGauge, 2, 0);
+
+    m_lanGauge = new SteamGauge("LAN", "Mbps", 0, 1000, 800);
+    m_lanGauge->setSubtitle("↓ --  ↑ --");
+    m_lanGauge->setBezelColor(QColor(30, 100, 200));
+    m_lanGauge->setNeedleColor(QColor(80, 160, 255));
+    gaugeGrid->addWidget(m_lanGauge, 2, 1);
+
     m_dimmATempGauge = new SteamGauge("DIMM A", "°C", 0, 85, 68);
     m_dimmATempGauge->setSubtitle("--°C");
-    gaugeGrid->addWidget(m_dimmATempGauge, 2, 1);
+    gaugeGrid->addWidget(m_dimmATempGauge, 2, 2);
 
-    // RAM stick B temp (SPD5118 DIMM B)
     m_dimmBTempGauge = new SteamGauge("DIMM B", "°C", 0, 85, 68);
     m_dimmBTempGauge->setSubtitle("--°C");
-    gaugeGrid->addWidget(m_dimmBTempGauge, 2, 2);
-
-    // Realtek NIC temp (r8169)
-    m_ethTempGauge = new SteamGauge("ETHERNET", "°C", 0, 100, 80);
-    m_ethTempGauge->setSubtitle("--°C");
-    gaugeGrid->addWidget(m_ethTempGauge, 2, 3);
+    gaugeGrid->addWidget(m_dimmBTempGauge, 2, 3);
 
     // Equal row/column stretch so gauges fill the form
     for (int r = 0; r < 3; ++r) gaugeGrid->setRowStretch(r, 1);
@@ -199,8 +206,47 @@ void SystemMonitorV2::setupUI() {
 
     mainLayout->addLayout(gaugeGrid, 1);
 
-    setMinimumSize(900, 650);
-    resize(1000, 760);
+    // ── NVIDIA GPU row (full-width) ──
+    auto *nvRow = new QWidget();
+    auto *nvLay = new QHBoxLayout(nvRow);
+    nvLay->setContentsMargins(0, 0, 0, 0);
+    nvLay->addStretch(1);
+    m_nvGpuGauge = new SteamGauge("NVIDIA GEFORCE RTX 4060 Ti", "%", 0, 100, 80);
+    m_nvGpuGauge->setSubtitle("-- % / --°C");
+    m_nvGpuGauge->setFixedHeight(220);
+    m_nvGpuGauge->setBezelColor(QColor(118, 185, 0));
+    m_nvGpuGauge->setNeedleColor(QColor(255, 255, 255));
+    nvLay->addWidget(m_nvGpuGauge, 1);
+    nvLay->addStretch(1);
+    mainLayout->addWidget(nvRow);
+
+    // ── Rivet row at the very bottom ──
+    auto *botRivetRow = new QWidget();
+    auto *botRivetLay = new QHBoxLayout(botRivetRow);
+    botRivetLay->setContentsMargins(0, 0, 0, 0);
+    botRivetLay->setSpacing(0);
+    auto addBotRivet = [&]() {
+        auto *rivet = new QLabel();
+        rivet->setFixedSize(10, 10);
+        rivet->setStyleSheet(
+            "background: qradialgradient(cx:0.35, cy:0.35, radius:0.5, "
+            "  fx:0.35, fy:0.35, "
+            "  stop:0 #f0d080, stop:0.4 #c8a050, "
+            "  stop:0.7 #8a6520, stop:1 #4a3510);"
+            "border: 1px solid #3d2a06;"
+            "border-radius: 5px;"
+        );
+        botRivetLay->addWidget(rivet);
+        botRivetLay->addStretch(1);
+    };
+    for (int i = 0; i < 12; ++i) {
+        if (i > 0) botRivetLay->addSpacing(4);
+        addBotRivet();
+    }
+    mainLayout->addWidget(botRivetRow);
+
+    setMinimumSize(1200, 1100);
+    resize(1400, 1200);
     setWindowTitle("Chronometric Engine Monitor");
 }
 
@@ -228,16 +274,24 @@ void SystemMonitorV2::keyPressEvent(QKeyEvent *event) {
 // ── Tick ───────────────────────────────────────────────────────
 void SystemMonitorV2::tick() {
     readCPU();
+    readNvidia();
     readRAM();
     readSensors();
     readNetwork();
 
-    // Row 0: Performance
+    // NVIDIA GPU (bottom row, dedicated)
+    m_nvGpuGauge->setValue(m_nvGpuUsage);
+    m_nvGpuGauge->setSubtitle(
+        QString("%1% / %2°C")
+            .arg(m_nvGpuUsage, 0, 'f', 0)
+            .arg(m_nvGpuTemp, 0, 'f', 0));
+
+    // Row 0: CPU & core
     m_cpuGauge->setValue(m_cpuUsage);
     m_cpuGauge->setSubtitle(QString("%1%").arg(m_cpuUsage, 0, 'f', 0));
 
-    m_gpuGauge->setValue(m_gpuUsage);
-    m_gpuGauge->setSubtitle(QString("%1%").arg(m_gpuUsage, 0, 'f', 0));
+    m_cpuTempGauge->setValue(m_cpuTemp);
+    m_cpuTempGauge->setSubtitle(QString("%1°C").arg(m_cpuTemp, 0, 'f', 0));
 
     m_ramGauge->setValue(m_ramGB);
     m_ramGauge->setSubtitle(
@@ -245,10 +299,23 @@ void SystemMonitorV2::tick() {
             .arg(m_ramGB, 0, 'f', 1)
             .arg(m_ramTotalGB, 0, 'f', 0));
 
-    m_cpuTempGauge->setValue(m_cpuTemp);
-    m_cpuTempGauge->setSubtitle(QString("%1°C").arg(m_cpuTemp, 0, 'f', 0));
+    m_chassisGauge->setValue(m_chassisTemp);
+    m_chassisGauge->setSubtitle(QString("%1°C").arg(m_chassisTemp, 0, 'f', 0));
 
-    // Row 1: Network + storage/graphics temps
+    // Row 1: iGPU (Radeon 780M)
+    m_gpuGauge->setValue(m_gpuUsage);
+    m_gpuGauge->setSubtitle(QString("%1%").arg(m_gpuUsage, 0, 'f', 0));
+
+    m_igpuTempGauge->setValue(m_igpuTemp);
+    m_igpuTempGauge->setSubtitle(QString("%1°C").arg(m_igpuTemp, 0, 'f', 0));
+
+    m_gpuVramGauge->setValue(m_gpuVramGB);
+    m_gpuVramGauge->setSubtitle(QString("%1 GB").arg(m_gpuVramGB, 0, 'f', 1));
+
+    m_nvmeTempGauge->setValue(m_nvmeTemp);
+    m_nvmeTempGauge->setSubtitle(QString("%1°C").arg(m_nvmeTemp, 0, 'f', 0));
+
+    // Row 2: Network + RAM sticks
     m_wanGauge->setValue(m_wanDown);
     m_wanGauge->setSecondaryValue(m_wanUp);
     m_wanGauge->setSubtitle(
@@ -263,24 +330,20 @@ void SystemMonitorV2::tick() {
             .arg(m_lanDown, 0, 'f', m_lanDown >= 10 ? 1 : 2)
             .arg(m_lanUp, 0, 'f', m_lanUp >= 10 ? 1 : 2));
 
-    m_nvmeTempGauge->setValue(m_nvmeTemp);
-    m_nvmeTempGauge->setSubtitle(QString("%1°C").arg(m_nvmeTemp, 0, 'f', 0));
-
-    m_igpuTempGauge->setValue(m_igpuTemp);
-    m_igpuTempGauge->setSubtitle(QString("%1°C").arg(m_igpuTemp, 0, 'f', 0));
-
-    // Row 2: Enclosure / peripheral temps
-    m_chassisGauge->setValue(m_chassisTemp);
-    m_chassisGauge->setSubtitle(QString("%1°C").arg(m_chassisTemp, 0, 'f', 0));
-
     m_dimmATempGauge->setValue(m_dimmATemp);
     m_dimmATempGauge->setSubtitle(QString("%1°C").arg(m_dimmATemp, 0, 'f', 0));
 
     m_dimmBTempGauge->setValue(m_dimmBTemp);
     m_dimmBTempGauge->setSubtitle(QString("%1°C").arg(m_dimmBTemp, 0, 'f', 0));
 
-    m_ethTempGauge->setValue(m_ethTemp);
-    m_ethTempGauge->setSubtitle(QString("%1°C").arg(m_ethTemp, 0, 'f', 0));
+    // ── Clock with sweeping second hand ──
+    QTime now = QTime::currentTime();
+    double sec = now.second() + now.msec() / 1000.0;          // 0-60 continuous
+    double min = now.minute() + sec / 60.0;                    // 0-60 continuous
+    double hour = (now.hour() % 12) * 5.0 + min / 12.0;       // 0-60 (maps 12h → 0-60 via *5)
+    m_clockGauge->setValue(sec);                               // second hand = primary needle (crimson, long)
+    m_clockGauge->setSecondaryValue(min);                      // minute hand = amber secondary (65% length)
+    m_clockGauge->setTertiaryValue(hour);                      // hour hand = gold tertiary (50% length)
 }
 
 // ── CPU ────────────────────────────────────────────────────────
@@ -305,6 +368,23 @@ void SystemMonitorV2::readCPU() {
                 m_prevIdle = idle;
                 m_prevTotal = total;
             }
+        }
+    }
+}
+
+// ── NVIDIA GPU ────────────────────────────────────────────────
+void SystemMonitorV2::readNvidia() {
+    QProcess proc;
+    proc.start("nvidia-smi",
+        QStringList() << "--query-gpu=utilization.gpu,temperature.gpu"
+                      << "--format=csv,noheader,nounits");
+    proc.waitForFinished(3000);
+    QString out = proc.readAllStandardOutput().trimmed();
+    if (!out.isEmpty()) {
+        QStringList parts = out.split(',');
+        if (parts.size() >= 2) {
+            m_nvGpuUsage = parts[0].trimmed().toDouble();
+            m_nvGpuTemp  = parts[1].trimmed().toDouble();
         }
     }
 }
@@ -400,6 +480,15 @@ void SystemMonitorV2::readSensors() {
     // GPU usage placeholder — read from amdgpu power/volt if available
     m_gpuUsage = 0.0;
     m_gpuTemp = m_igpuTemp;
+
+    // AMD GPU VRAM usage
+    m_gpuVramGB = 0.0;
+    QFile vramF("/sys/class/drm/card0/device/mem_info_vram_used");
+    if (vramF.open(QFile::ReadOnly)) {
+        double usedBytes = QString::fromUtf8(vramF.readAll()).trimmed().toDouble();
+        m_gpuVramGB = usedBytes / 1073741824.0;
+        vramF.close();
+    }
 }
 
 // ── Network ────────────────────────────────────────────────────

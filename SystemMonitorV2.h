@@ -30,6 +30,7 @@ private:
     void setupUI();
     void setupStyle();
     void readCPU();
+    void readNvidia();
     void readRAM();
     void readSensors();
     void readNetwork();
@@ -39,6 +40,9 @@ private:
     double m_cpuTemp = 0.0;
     double m_gpuUsage = 0.0;
     double m_gpuTemp = 0.0;
+    double m_gpuVramGB = 0.0;
+    double m_nvGpuUsage = 0.0;
+    double m_nvGpuTemp = 0.0;
     double m_nvmeTemp = 0.0;
     double m_igpuTemp = 0.0;
     double m_dimmATemp = 0.0;
@@ -62,6 +66,8 @@ private:
     // ── UI elements ──
     SteamGauge *m_cpuGauge = nullptr;
     SteamGauge *m_gpuGauge = nullptr;
+    SteamGauge *m_gpuVramGauge = nullptr;
+    SteamGauge *m_nvGpuGauge = nullptr;
     SteamGauge *m_wanGauge = nullptr;
     SteamGauge *m_lanGauge = nullptr;
     SteamGauge *m_ramGauge = nullptr;
@@ -72,6 +78,7 @@ private:
     SteamGauge *m_dimmBTempGauge = nullptr;
     SteamGauge *m_ethTempGauge = nullptr;
     SteamGauge *m_chassisGauge = nullptr;
+    SteamGauge *m_clockGauge = nullptr;
 
     // ── Timer ──
     QTimer *m_tickTimer = nullptr;

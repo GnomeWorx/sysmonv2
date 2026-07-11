@@ -67,14 +67,24 @@ SteamGauge::SteamGauge(const QString &title,
 }
 
 // ── Public API ─────────────────────────────────────────────────
+void SteamGauge::setAnimDuration(int ms) {
+    m_anim->setDuration(ms);
+}
+
 void SteamGauge::setValue(double val) {
     m_value = qBound(m_minValue, val, m_maxValue);
 
-    // Animate needle
-    m_anim->stop();
-    m_anim->setStartValue(m_animatedValue);
-    m_anim->setEndValue(m_value);
-    m_anim->start();
+    if (m_anim->duration() == 0) {
+        // Instant mode — snap needle directly, no animation
+        m_animatedValue = m_value;
+        // Skip red-zone shake for instant-mode gauges
+    } else {
+        // Animate needle
+        m_anim->stop();
+        m_anim->setStartValue(m_animatedValue);
+        m_anim->setEndValue(m_value);
+        m_anim->start();
+    }
 
     // ── Red-zone shake ──
     bool inRed = isInRedZone();
@@ -102,6 +112,11 @@ void SteamGauge::setValue(double val) {
 
 void SteamGauge::setSecondaryValue(double val) {
     m_secondaryValue = val;
+    update();
+}
+
+void SteamGauge::setTertiaryValue(double val) {
+    m_tertiaryValue = val;
     update();
 }
 
@@ -159,16 +174,20 @@ void SteamGauge::paintEvent(QPaintEvent *) {
     }
     if (m_woodTexture && !m_woodTexture->isNull()) {
         p.drawTiledPixmap(rect(), *m_woodTexture);
-        // Mahogany stain: deep warm brown overlay
-        p.fillRect(rect(), QColor(50, 18, 6, 120));
+        // Mahogany stain: deep warm brown overlay (darker)
+        p.fillRect(rect(), QColor(40, 14, 4, 180));
         // Additional dark vignette at edges for depth
-        p.fillRect(rect(), QColor(0, 0, 0, 50));
+        p.fillRect(rect(), QColor(0, 0, 0, 70));
     } else {
         p.fillRect(rect(), COLOR_WOOD);  // fallback
     }
 
     // ── Draw components (background layers first) ──
-    drawBrassRing(p, gaugeRect);
+    if (m_unit == "HMS") {
+        drawClockBezel(p, gaugeRect);
+    } else {
+        drawBrassRing(p, gaugeRect);
+    }
     drawDialFace(p, gaugeRect);
     drawRedZone(p, gaugeRect);
     drawTickMarks(p, gaugeRect);
@@ -178,13 +197,20 @@ void SteamGauge::paintEvent(QPaintEvent *) {
     drawSubtitle(p, gaugeRect);
 
     // Needle on top — covers text if it passes over it (realism)
-    drawNeedle(p, gaugeRect, m_animatedValue, COLOR_NEEDLE);
+    drawNeedle(p, gaugeRect, m_animatedValue, m_needleColor.isValid() ? m_needleColor : COLOR_NEEDLE);
 
     // Secondary needle (e.g. temperature on CPU gauge)
     if (m_secondaryValue >= m_minValue) {
         double ratio = (m_secondaryValue - m_minValue) / (m_maxValue - m_minValue);
         double secVal = m_minValue + ratio * (m_maxValue - m_minValue);
-        drawNeedle(p, gaugeRect, secVal, QColor(200, 100, 20));   // amber secondary needle
+        drawNeedle(p, gaugeRect, secVal, QColor(200, 100, 20), 0.65);   // amber secondary needle
+    }
+
+    // Tertiary needle (e.g. hour hand on clock)
+    if (m_tertiaryValue >= m_minValue) {
+        double ratio = (m_tertiaryValue - m_minValue) / (m_maxValue - m_minValue);
+        double terVal = m_minValue + ratio * (m_maxValue - m_minValue);
+        drawNeedle(p, gaugeRect, terVal, QColor(180, 140, 60), 0.50);   // gold tertiary (short & stubby)
     }
 
     drawGlassOverlay(p, gaugeRect);
@@ -192,6 +218,26 @@ void SteamGauge::paintEvent(QPaintEvent *) {
 }
 
 // ── Drawing helpers ────────────────────────────────────────────
+
+void SteamGauge::setArc(double degStart, double degSpan) {
+    m_degStart = degStart;
+    m_degSpan = degSpan;
+    update();
+}
+
+void SteamGauge::setNeedleBaseWidth(double ratio) {
+    m_needleBaseWidth = ratio;
+}
+
+void SteamGauge::setBezelColor(const QColor &c) {
+    m_bezelColor = c;
+    update();
+}
+
+void SteamGauge::setNeedleColor(const QColor &c) {
+    m_needleColor = c;
+    update();
+}
 
 void SteamGauge::drawBrassRing(QPainter &p, const QRectF &rect) {
     double ringW = rect.width() * RING_WIDTH_RATIO;
@@ -213,11 +259,21 @@ void SteamGauge::drawBrassRing(QPainter &p, const QRectF &rect) {
 
     // The brass ring itself: offset gradient so highlight is top-left
     QRadialGradient rg(cx - outerR * 0.25, cy - outerR * 0.25, outerR);
+    if (m_bezelColor.isValid()) {
+        // Custom bezel colour (e.g. NVIDIA green)
+        int r = m_bezelColor.red(), g = m_bezelColor.green(), b = m_bezelColor.blue();
+        rg.setColorAt(0.0, QColor(qMin(255,r+60), qMin(255,g+60), qMin(255,b+60))); // bright highlight
+        rg.setColorAt(0.3, m_bezelColor.lighter(130));
+        rg.setColorAt(0.7, m_bezelColor);
+        rg.setColorAt(0.92, m_bezelColor.darker(150));
+        rg.setColorAt(1.0, m_bezelColor.darker(250));
+    } else {
     rg.setColorAt(0.0, QColor(255, 215, 100));    // bright gold highlight
     rg.setColorAt(0.3, COLOR_BRASS_LIGHT);         // #d4a843
     rg.setColorAt(0.7, COLOR_BRASS_MID);            // #b8860b
     rg.setColorAt(0.92, COLOR_BRASS_DARK);          // #8b5a00
     rg.setColorAt(1.0, QColor(50, 30, 0));          // dark edge
+    }
     p.setBrush(rg);
     p.setPen(Qt::NoPen);
     p.drawEllipse(rect);
@@ -235,11 +291,70 @@ void SteamGauge::drawBrassRing(QPainter &p, const QRectF &rect) {
     p.drawEllipse(innerRect);
 }
 
+void SteamGauge::drawClockBezel(QPainter &p, const QRectF &rect) {
+    // Silver bezel — brushed metal look, light source top-left
+    double cx = rect.center().x();
+    double cy = rect.center().y();
+    double outerR = rect.width() / 2;
+
+    // Outer drop shadow (same as brass ring)
+    QRectF shadowRect = rect.adjusted(3, 4, 3, 4);
+    QRadialGradient sg(shadowRect.center(), shadowRect.width() / 2);
+    sg.setColorAt(0.6, QColor(0, 0, 0, 60));
+    sg.setColorAt(1.0, QColor(0, 0, 0, 0));
+    p.setBrush(sg);
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(shadowRect);
+
+    // Silver ring with gradient
+    QRadialGradient rg(cx - outerR * 0.25, cy - outerR * 0.25, outerR);
+    rg.setColorAt(0.0, QColor(220, 220, 225));    // bright highlight
+    rg.setColorAt(0.3, QColor(200, 200, 205));
+    rg.setColorAt(0.7, QColor(175, 175, 180));
+    rg.setColorAt(0.92, QColor(140, 140, 145));
+    rg.setColorAt(1.0, QColor(90, 90, 95));
+    p.setBrush(rg);
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(rect);
+
+    // Inner bevel — chamfer to the enamel face
+    double ringW = rect.width() * RING_WIDTH_RATIO;
+    QRectF innerRect = rect.adjusted(ringW, ringW, -ringW, -ringW);
+    QRadialGradient irg(cx - innerRect.width() * 0.2, cy - innerRect.width() * 0.2,
+                        innerRect.width() / 2);
+    irg.setColorAt(0.0, QColor(220, 215, 200));
+    irg.setColorAt(0.85, QColor(190, 185, 170));
+    irg.setColorAt(0.95, QColor(140, 130, 115));
+    irg.setColorAt(1.0, QColor(80, 75, 65));
+    p.setBrush(irg);
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(innerRect);
+}
+
 void SteamGauge::drawDialFace(QPainter &p, const QRectF &rect) {
     double ringW = rect.width() * RING_WIDTH_RATIO;
     QRectF faceRect = rect.adjusted(ringW + 3, ringW + 3, -(ringW + 3), -(ringW + 3));
     double cx = faceRect.center().x();
     double cy = faceRect.center().y();
+
+    if (m_unit == "HMS") {
+        // Clock face — darker enamel dial to stand out from standard gauges
+        QRadialGradient fg(cx - faceRect.width() * 0.15, cy - faceRect.height() * 0.15,
+                            faceRect.width() / 2);
+        fg.setColorAt(0.0, QColor(220, 215, 200));
+        fg.setColorAt(0.4, QColor(200, 195, 180));
+        fg.setColorAt(0.75, QColor(185, 178, 160));
+        fg.setColorAt(1.0, QColor(160, 150, 130));
+        p.setBrush(fg);
+        p.setPen(QPen(QColor(120, 110, 90), 1));
+        p.drawEllipse(faceRect);
+
+        // Subtle ring around dial face
+        p.setPen(QPen(QColor(100, 90, 70, 60), 1.5));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(faceRect.adjusted(2,2,-2,-2));
+        return;
+    }
 
     // Parchment dial face with radial gradient
     QRadialGradient fg(cx - faceRect.width() * 0.15, cy - faceRect.height() * 0.15,
@@ -279,8 +394,8 @@ void SteamGauge::drawRedZone(QPainter &p, const QRectF &rect) {
     QRectF faceRect = rect.adjusted(ringW + 4, ringW + 4, -(ringW + 4), -(ringW + 4));
 
     // Red zone: top 1/5 of the arc
-    double redStart = DEG_START + DEG_SPAN * (m_redThreshold - m_minValue) / (m_maxValue - m_minValue);
-    double redSpan = DEG_START + DEG_SPAN - redStart;
+    double redStart = m_degStart + m_degSpan * (m_redThreshold - m_minValue) / (m_maxValue - m_minValue);
+    double redSpan = m_degStart + m_degSpan - redStart;
 
     p.setPen(QPen(QColor(180, 30, 30, 80), faceRect.width() * 0.06));
     p.setBrush(Qt::NoBrush);
@@ -315,12 +430,48 @@ void SteamGauge::drawTickMarks(QPainter &p, const QRectF &rect) {
 
     p.setPen(QPen(COLOR_ENGRAVED, 1.2));
 
+    // ── Clock face (HMS unit) ──
+    if (m_unit == "HMS") {
+        // Full 360° clock with 12 at top. m_degStart=90, m_degSpan=360
+        // Hours 1-12 spaced evenly: each = m_degStart + m_degSpan * (h/12)
+        for (int h = 1; h <= 12; ++h) {
+            double frac = (double)h / 12.0;
+            double angle = m_degStart + frac * m_degSpan;
+            double rad = qDegreesToRadians(angle);
+
+            double hInner = outerR - rect.width() * 0.04;
+            double x1 = cx + outerR * qCos(rad);
+            double y1 = cy + outerR * qSin(rad);
+            double x2 = cx + hInner * qCos(rad);
+            double y2 = cy + hInner * qSin(rad);
+            p.setPen(QPen(COLOR_ENGRAVED, 1.8));
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2));
+
+            double labelR = hInner - 10;
+            double lx = cx + labelR * qCos(rad);
+            double ly = cy + labelR * qSin(rad);
+
+            p.setPen(COLOR_ENGRAVED);
+            QFont f = font();
+            f.setPointSize(8);
+            f.setBold(true);
+            p.setFont(f);
+
+            QRectF lr(lx - 10, ly - 7, 20, 14);
+            lr.moveCenter(QPointF(lx, ly));
+            p.drawText(lr, Qt::AlignCenter, QString::number(h));
+            p.setPen(QPen(COLOR_ENGRAVED, 1.8));
+        }
+        return;
+    }
+
+    // ── Standard industrial gauge ticks ──
     int numMajor = 10;
     int numMinor = 50;  // 5 per major
 
     for (int i = 0; i <= numMinor; ++i) {
         double frac = (double)i / numMinor;
-        double angle = DEG_START + frac * DEG_SPAN;
+        double angle = m_degStart + frac * m_degSpan;
         double rad = qDegreesToRadians(angle);
 
         bool isMajor = (i % (numMinor / numMajor) == 0);
@@ -360,14 +511,14 @@ void SteamGauge::drawTickMarks(QPainter &p, const QRectF &rect) {
     }
 }
 
-void SteamGauge::drawNeedle(QPainter &p, const QRectF &rect, double val, const QColor &color) {
+void SteamGauge::drawNeedle(QPainter &p, const QRectF &rect, double val, const QColor &color, double lenRatio) {
     double frac = (val - m_minValue) / (m_maxValue - m_minValue);
-    double angle = DEG_START + frac * DEG_SPAN;
+    double angle = m_degStart + frac * m_degSpan;
     double rad = qDegreesToRadians(angle);
 
     double cx = rect.center().x();
     double cy = rect.center().y();
-    double needleLen = rect.width() / 2 * NEEDLE_LEN_RATIO;
+    double needleLen = rect.width() / 2 * lenRatio;
     double ringW = rect.width() * RING_WIDTH_RATIO;
     double innerR = rect.width() / 2 - ringW - 4;
 
@@ -376,7 +527,7 @@ void SteamGauge::drawNeedle(QPainter &p, const QRectF &rect, double val, const Q
     double tipY = cy + needleLen * qSin(rad);
 
     // Needle base (wider)
-    double baseLen = rect.width() * 0.05;
+    double baseLen = rect.width() * m_needleBaseWidth;
     double baseAngle1 = angle + 85.0;
     double baseAngle2 = angle - 85.0;
     double b1x = cx + baseLen * qCos(qDegreesToRadians(baseAngle1));
@@ -479,13 +630,15 @@ void SteamGauge::drawTitle(QPainter &p, const QRectF &rect) {
     p.drawText(titleRect, Qt::AlignCenter, m_title);
 
     // Small unit text beneath title on the dial face
-    QFont uf = font();
-    uf.setPointSize(7);
-    uf.setBold(false);
-    p.setFont(uf);
-    p.setPen(QColor(160, 130, 60));
-    QRectF unitRect(cx - 60, cy + 10, 120, 14);
-    p.drawText(unitRect, Qt::AlignCenter, m_unit);
+    if (m_unit != "HMS") {  // clock has no unit label needed
+        QFont uf = font();
+        uf.setPointSize(7);
+        uf.setBold(false);
+        p.setFont(uf);
+        p.setPen(QColor(160, 130, 60));
+        QRectF unitRect(cx - 60, cy + 10, 120, 14);
+        p.drawText(unitRect, Qt::AlignCenter, m_unit);
+    }
 }
 
 void SteamGauge::drawSubtitle(QPainter &p, const QRectF &rect) {
@@ -498,7 +651,7 @@ void SteamGauge::drawSubtitle(QPainter &p, const QRectF &rect) {
     p.setFont(f);
     p.setPen(Qt::white);
     // Subtle shadow for readability
-    p.setPen(QColor(0, 0, 0, 100));
+    p.setPen(QColor(0, 0, 0, 180));
 
     double ringW = rect.width() * RING_WIDTH_RATIO;
     QRectF faceRect = rect.adjusted(ringW + 4, ringW + 4, -(ringW + 4), -(ringW + 4));
@@ -516,7 +669,7 @@ void SteamGauge::drawSubtitle(QPainter &p, const QRectF &rect) {
     // Use monospace for the value
     f2.setFamily("monospace");
     p.setFont(f2);
-    p.setPen(QColor(220, 220, 240));
+    p.setPen(QColor(255, 230, 160));
     QRectF subRect(cx - 50, cy - 9, 100, 16);
     p.drawText(subRect, Qt::AlignCenter, m_subtitle);
 }

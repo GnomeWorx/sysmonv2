@@ -27,7 +27,13 @@ public:
 
     void setValue(double val);
     void setSecondaryValue(double val);        ///< second needle (e.g. temp on CPU gauge)
+    void setTertiaryValue(double val);         ///< third needle (e.g. hour hand on clock)
     void setSubtitle(const QString &text);     ///< e.g. "42%  68°C"
+    void setArc(double degStart, double degSpan); ///< override arc angles (default 135, 270)
+    void setAnimDuration(int ms);         ///< set needle animation duration (0 = instant)
+    void setNeedleBaseWidth(double ratio); ///< needle base width as ratio of gauge width (default 0.05)
+    void setBezelColor(const QColor &c);  ///< override bezel/ring colour (default brass)
+    void setNeedleColor(const QColor &c); ///< override primary needle colour (default crimson)
 
     double value() const { return m_value; }
     double animatedValue() const { return m_animatedValue; }
@@ -48,9 +54,10 @@ protected:
 
 private:
     void drawBrassRing(QPainter &p, const QRectF &rect);
+    void drawClockBezel(QPainter &p, const QRectF &rect);
     void drawDialFace(QPainter &p, const QRectF &rect);
     void drawTickMarks(QPainter &p, const QRectF &rect);
-    void drawNeedle(QPainter &p, const QRectF &rect, double val, const QColor &color);
+    void drawNeedle(QPainter &p, const QRectF &rect, double val, const QColor &color, double lenRatio = 0.70);
     void drawGlassOverlay(QPainter &p, const QRectF &rect);
     void drawTitle(QPainter &p, const QRectF &rect);
     void drawSubtitle(QPainter &p, const QRectF &rect);
@@ -77,8 +84,14 @@ private:
     double m_minValue;
     double m_maxValue;
     double m_redThreshold;
+    double m_degStart = 135.0;
+    double m_degSpan = 270.0;
+    double m_needleBaseWidth = 0.05;
+    QColor m_bezelColor;        // invalid = use default brass
+    QColor m_needleColor;       // invalid = use default COLOR_NEEDLE
     double m_value = 0.0;
     double m_secondaryValue = -1.0;   // -1 means disabled
+    double m_tertiaryValue = -1.0;    // -1 means disabled
     double m_animatedValue = 0.0;
 
     // ── Animation ──
