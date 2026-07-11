@@ -4,7 +4,7 @@ A real-time Linux system monitor with photo-realistic steampunk brass analog gau
 
 ## Overview
 
-SysmonV2 replaces conventional line charts with 12 custom-painted analog dial gauges on a dark wood panel. Each gauge features a polished brass bezel with light-from-top-left shading, a parchment dial face with concentric machined rings, a tapered crimson needle with drop shadow, and a glass dome overlay. When any gauge enters the red zone (top 1/5 of range), the gauge shakes like a game-style warning indicator.
+SysmonV2 replaces conventional line charts with 12 custom-painted analog dial gauges on a full-width dark wood panel background. Each gauge features a polished brass bezel with centered radial shading, a parchment dial face with concentric machined rings, a tapered crimson needle with drop shadow, and a glass dome overlay. When any gauge enters the red zone (top 1/5 of range), the gauge shakes like a game-style warning indicator.
 
 ## The 12 Gauges (3 × 4 Grid)
 
@@ -27,8 +27,9 @@ SysmonV2 replaces conventional line charts with 12 custom-painted analog dial ga
 
 Each gauge is a custom `SteamGauge` QWidget painted from scratch:
 
-- **Brass bezel**: Radial gradient with centre offset toward top-left (light source), giving bright gold top-left → dark brown bottom-right. Outer drop shadow cast onto wood panel.
-- **Dial face**: Offset radial gradient, bright top-left → darker parchment bottom-right. Three faint concentric rings for a machined appearance. Subtle bottom-rim shadow.
+- **Wood panel background**: Painted once by the main window's central widget as a continuous tiled oak veneer image with a heavy dark stain overlay, spanning the full width behind all gauges. Gauges use `WA_TranslucentBackground` so the wood shows through seamless between columns.
+- **Brass bezel**: Centered radial gradient with even shading from light brass → dark edge. Outer drop shadow cast onto wood panel.
+- **Dial face**: Centered radial gradient, bright centre → darker parchment edge. Three faint concentric rings for a machined appearance. Subtle bottom-rim shadow.
 - **Tick marks**: 50 minor + 10 major ticks with engraved-style value labels at each major tick. Drawn as fine dark lines.
 - **Red danger zone**: Semi-transparent red arc covering the top 1/5 of the range, drawn along the outer edge of the dial face.
 - **Needle**: Tapered triangular shape with 3D gradient fill (lighter tip → darker base). Crimson primary, amber secondary (for dual-value gauges). Drop shadow casts down-right at +3px +3px from a fixed 45° top-left light.

@@ -12,6 +12,7 @@
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QGraphicsDropShadowEffect>
+#include <QPainter>
 #include <QDateTime>
 #include <QTime>
 #include <unistd.h>
@@ -48,7 +49,32 @@ SystemMonitorV2::~SystemMonitorV2() = default;
 
 // ── UI Setup ───────────────────────────────────────────────────
 void SystemMonitorV2::setupUI() {
-    auto *central = new QWidget(this);
+    // ── Custom central widget that paints the wood panel background ──
+    class WoodPanelWidget : public QWidget {
+    public:
+        explicit WoodPanelWidget(QWidget *parent = nullptr) : QWidget(parent) {
+            m_woodTexture = new QPixmap("/home/sfarrant/oak_veneer_16x9_4k.jpg");
+            if (!m_woodTexture->isNull())
+                m_woodTexture->setDevicePixelRatio(1.0);
+        }
+        ~WoodPanelWidget() override { delete m_woodTexture; }
+    protected:
+        void paintEvent(QPaintEvent *) override {
+            QPainter p(this);
+            p.setRenderHint(QPainter::SmoothPixmapTransform);
+            if (m_woodTexture && !m_woodTexture->isNull()) {
+                p.drawTiledPixmap(rect(), *m_woodTexture);
+                // Heavy dark stain to mute the wood grain
+                p.fillRect(rect(), QColor(15, 8, 3, 200));
+            } else {
+                p.fillRect(rect(), QColor(30, 14, 5));
+            }
+        }
+    private:
+        QPixmap *m_woodTexture = nullptr;
+    };
+
+    auto *central = new WoodPanelWidget(this);
     setCentralWidget(central);
     auto *mainLayout = new QVBoxLayout(central);
     mainLayout->setContentsMargins(6, 6, 6, 6);
@@ -155,7 +181,7 @@ void SystemMonitorV2::setupUI() {
     gaugeGrid->addWidget(m_cpuTempGauge, 0, 1);
 
     m_ramGauge = new SteamGauge("RAM", "GB", 0, 64, 51);
-    m_ramGauge->setSubtitle("-- / -- GB");
+    m_ramGauge->setSubtitle("-- / 64 GB");
     gaugeGrid->addWidget(m_ramGauge, 0, 2);
 
     m_chassisGauge = new SteamGauge("CHASSIS", "°C", 0, 50, 40);
@@ -171,7 +197,7 @@ void SystemMonitorV2::setupUI() {
     m_igpuTempGauge->setSubtitle("--°C");
     gaugeGrid->addWidget(m_igpuTempGauge, 1, 1);
 
-    m_gpuVramGauge = new SteamGauge("M780 VRAM", "GB", 0, 8, 7);
+    m_gpuVramGauge = new SteamGauge("M780 VRAM", "GB", 0, 2, 2);
     m_gpuVramGauge->setSubtitle("-- GB");
     gaugeGrid->addWidget(m_gpuVramGauge, 1, 2);
 
@@ -180,7 +206,7 @@ void SystemMonitorV2::setupUI() {
     gaugeGrid->addWidget(m_nvmeTempGauge, 1, 3);
 
     // Row 2: Network + RAM sticks
-    m_wanGauge = new SteamGauge("WAN", "Mbps", 0, 1000, 800);
+    m_wanGauge = new SteamGauge("WAN", "Mbps", 0, 200, 160);
     m_wanGauge->setSubtitle("↓ --  ↑ --");
     m_wanGauge->setBezelColor(QColor(30, 100, 200));
     m_wanGauge->setNeedleColor(QColor(80, 160, 255));
@@ -295,9 +321,8 @@ void SystemMonitorV2::tick() {
 
     m_ramGauge->setValue(m_ramGB);
     m_ramGauge->setSubtitle(
-        QString("%1 / %2 GB")
-            .arg(m_ramGB, 0, 'f', 1)
-            .arg(m_ramTotalGB, 0, 'f', 0));
+        QString("%1 / 64 GB")
+            .arg(m_ramGB, 0, 'f', 1));
 
     m_chassisGauge->setValue(m_chassisTemp);
     m_chassisGauge->setSubtitle(QString("%1°C").arg(m_chassisTemp, 0, 'f', 0));
@@ -397,7 +422,7 @@ void SystemMonitorV2::readRAM() {
         QString line;
         while (in.readLineInto(&line)) {
             if (line.startsWith("MemAvailable:")) {
-                double availKb = line.section(' ', 1, 1).trimmed().toDouble();
+                double availKb = line.section(' ', -2, -2).trimmed().toDouble();
                 double totalKb = m_ramTotalGB * 1048576.0;
                 m_ramGB = (totalKb - availKb) / 1048576.0;
                 break;
@@ -477,13 +502,18 @@ void SystemMonitorV2::readSensors() {
         }
     }
 
-    // GPU usage placeholder — read from amdgpu power/volt if available
+    // GPU usage — read from amdgpu
     m_gpuUsage = 0.0;
     m_gpuTemp = m_igpuTemp;
+    QFile gpuBusyF("/sys/devices/pci0000:00/0000:00:08.1/0000:c4:00.0/gpu_busy_percent");
+    if (gpuBusyF.open(QFile::ReadOnly)) {
+        m_gpuUsage = QString::fromUtf8(gpuBusyF.readAll()).trimmed().toDouble();
+        gpuBusyF.close();
+    }
 
-    // AMD GPU VRAM usage
+    // AMD GPU VRAM usage — Radeon 780M (iGPU, 1 GB reserved)
     m_gpuVramGB = 0.0;
-    QFile vramF("/sys/class/drm/card0/device/mem_info_vram_used");
+    QFile vramF("/sys/devices/pci0000:00/0000:00:08.1/0000:c4:00.0/mem_info_vram_used");
     if (vramF.open(QFile::ReadOnly)) {
         double usedBytes = QString::fromUtf8(vramF.readAll()).trimmed().toDouble();
         m_gpuVramGB = usedBytes / 1073741824.0;

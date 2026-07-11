@@ -74,7 +74,6 @@ private:
     // ── Cached pixmaps ──
     QPixmap m_cachedFace;
     QPixmap m_cachedRing;
-    static QPixmap *m_woodTexture;  // loaded once, shared across all gauges
     bool m_cacheDirty = true;
 
     // ── Data ──

@@ -26,9 +26,6 @@ static const QColor COLOR_RIVET(192, 160, 96);          // #c0a060
 static const QColor COLOR_GOLD_TEXT(212, 168, 67);      // #d4a843
 static const QColor COLOR_ENGRAVED(42, 31, 20);         // #2a1f14
 
-// Static wood texture pointer — lazily allocated on first paint
-QPixmap *SteamGauge::m_woodTexture = nullptr;
-
 // ── Constructor ────────────────────────────────────────────────
 SteamGauge::SteamGauge(const QString &title,
                        const QString &unit,
@@ -45,6 +42,8 @@ SteamGauge::SteamGauge(const QString &title,
 {
     setMinimumSize(120, 140);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setAutoFillBackground(false);
 
     // ── Smooth needle animation ──
     m_anim = new QPropertyAnimation(this, "animatedValue", this);
@@ -165,22 +164,8 @@ void SteamGauge::paintEvent(QPaintEvent *) {
     int gy = (h - 20 - gaugeSize) / 2;
     QRectF gaugeRect(gx + shakeX, gy + shakeY, gaugeSize, gaugeSize);
 
-    // ── Background (wood panel) ──
-    // Tile the oak veneer texture as the board (lazy-load on first paint)
-    if (!m_woodTexture) {
-        m_woodTexture = new QPixmap("/home/sfarrant/oak_veneer_16x9_4k.jpg");
-        if (!m_woodTexture->isNull())
-            m_woodTexture->setDevicePixelRatio(1.0);
-    }
-    if (m_woodTexture && !m_woodTexture->isNull()) {
-        p.drawTiledPixmap(rect(), *m_woodTexture);
-        // Mahogany stain: deep warm brown overlay (darker)
-        p.fillRect(rect(), QColor(40, 14, 4, 180));
-        // Additional dark vignette at edges for depth
-        p.fillRect(rect(), QColor(0, 0, 0, 70));
-    } else {
-        p.fillRect(rect(), COLOR_WOOD);  // fallback
-    }
+    // ── Background — transparent (panel paints behind us) ──
+    // The full-width wood panel background is painted by SystemMonitorV2.
 
     // ── Draw components (background layers first) ──
     if (m_unit == "HMS") {
@@ -251,27 +236,24 @@ void SteamGauge::drawBrassRing(QPainter &p, const QRectF &rect) {
     p.setPen(Qt::NoPen);
     p.drawEllipse(shadowRect);
 
-    // ── Outer brass bezel with light-from-top-left shading ──
-    // Light hits top-left rim → bright, bottom-right → dark
+    // Centered gradient — no directional light source to avoid banding artefacts
     double cx = rect.center().x();
     double cy = rect.center().y();
     double outerR = rect.width() / 2;
 
-    // The brass ring itself: offset gradient so highlight is top-left
-    QRadialGradient rg(cx - outerR * 0.25, cy - outerR * 0.25, outerR);
+    // The brass ring itself: centered gradient for even shading
+    QRadialGradient rg(cx, cy, outerR);
     if (m_bezelColor.isValid()) {
         // Custom bezel colour (e.g. NVIDIA green)
         int r = m_bezelColor.red(), g = m_bezelColor.green(), b = m_bezelColor.blue();
-        rg.setColorAt(0.0, QColor(qMin(255,r+60), qMin(255,g+60), qMin(255,b+60))); // bright highlight
-        rg.setColorAt(0.3, m_bezelColor.lighter(130));
-        rg.setColorAt(0.7, m_bezelColor);
-        rg.setColorAt(0.92, m_bezelColor.darker(150));
+        rg.setColorAt(0.0, m_bezelColor.lighter(130));
+        rg.setColorAt(0.5, m_bezelColor);
+        rg.setColorAt(0.85, m_bezelColor.darker(150));
         rg.setColorAt(1.0, m_bezelColor.darker(250));
     } else {
-    rg.setColorAt(0.0, QColor(255, 215, 100));    // bright gold highlight
-    rg.setColorAt(0.3, COLOR_BRASS_LIGHT);         // #d4a843
-    rg.setColorAt(0.7, COLOR_BRASS_MID);            // #b8860b
-    rg.setColorAt(0.92, COLOR_BRASS_DARK);          // #8b5a00
+    rg.setColorAt(0.0, COLOR_BRASS_LIGHT);         // #d4a843
+    rg.setColorAt(0.5, COLOR_BRASS_MID);            // #b8860b
+    rg.setColorAt(0.85, COLOR_BRASS_DARK);          // #8b5a00
     rg.setColorAt(1.0, QColor(50, 30, 0));          // dark edge
     }
     p.setBrush(rg);
@@ -280,12 +262,11 @@ void SteamGauge::drawBrassRing(QPainter &p, const QRectF &rect) {
 
     // ── Inner bevel: chamfer ring between brass and dial face ──
     QRectF innerRect = rect.adjusted(ringW, ringW, -ringW, -ringW);
-    QRadialGradient irg(cx - innerRect.width() * 0.2, cy - innerRect.width() * 0.2,
-                        innerRect.width() / 2);
+    QRadialGradient irg(cx, cy, innerRect.width() / 2);
     irg.setColorAt(0.0, COLOR_PARCHMENT);
     irg.setColorAt(0.85, QColor(210, 190, 150));
-    irg.setColorAt(0.95, QColor(160, 120, 60));    // shadow where face meets brass
-    irg.setColorAt(1.0, QColor(80, 50, 15));        // deep shadow rim
+    irg.setColorAt(0.95, QColor(160, 120, 60));
+    irg.setColorAt(1.0, QColor(80, 50, 15));
     p.setBrush(irg);
     p.setPen(Qt::NoPen);
     p.drawEllipse(innerRect);
@@ -306,12 +287,11 @@ void SteamGauge::drawClockBezel(QPainter &p, const QRectF &rect) {
     p.setPen(Qt::NoPen);
     p.drawEllipse(shadowRect);
 
-    // Silver ring with gradient
-    QRadialGradient rg(cx - outerR * 0.25, cy - outerR * 0.25, outerR);
-    rg.setColorAt(0.0, QColor(220, 220, 225));    // bright highlight
-    rg.setColorAt(0.3, QColor(200, 200, 205));
-    rg.setColorAt(0.7, QColor(175, 175, 180));
-    rg.setColorAt(0.92, QColor(140, 140, 145));
+    // Silver ring with centered gradient — no directional banding
+    QRadialGradient rg(cx, cy, outerR);
+    rg.setColorAt(0.0, QColor(210, 210, 215));
+    rg.setColorAt(0.5, QColor(190, 190, 195));
+    rg.setColorAt(0.85, QColor(155, 155, 160));
     rg.setColorAt(1.0, QColor(90, 90, 95));
     p.setBrush(rg);
     p.setPen(Qt::NoPen);
@@ -320,8 +300,7 @@ void SteamGauge::drawClockBezel(QPainter &p, const QRectF &rect) {
     // Inner bevel — chamfer to the enamel face
     double ringW = rect.width() * RING_WIDTH_RATIO;
     QRectF innerRect = rect.adjusted(ringW, ringW, -ringW, -ringW);
-    QRadialGradient irg(cx - innerRect.width() * 0.2, cy - innerRect.width() * 0.2,
-                        innerRect.width() / 2);
+    QRadialGradient irg(cx, cy, innerRect.width() / 2);
     irg.setColorAt(0.0, QColor(220, 215, 200));
     irg.setColorAt(0.85, QColor(190, 185, 170));
     irg.setColorAt(0.95, QColor(140, 130, 115));
@@ -356,13 +335,12 @@ void SteamGauge::drawDialFace(QPainter &p, const QRectF &rect) {
         return;
     }
 
-    // Parchment dial face with radial gradient
-    QRadialGradient fg(cx - faceRect.width() * 0.15, cy - faceRect.height() * 0.15,
-                        faceRect.width() / 2);
-    fg.setColorAt(0.0, QColor(255, 252, 242));    // bright centre-offset toward light
-    fg.setColorAt(0.4, QColor(252, 242, 222));
-    fg.setColorAt(0.75, COLOR_PARCHMENT);           // #f5e6c8
-    fg.setColorAt(1.0, QColor(200, 180, 140));      // darker at bottom-right
+    // Parchment dial face with centered radial gradient
+    QRadialGradient fg(cx, cy, faceRect.width() / 2);
+    fg.setColorAt(0.0, QColor(255, 252, 242));
+    fg.setColorAt(0.5, QColor(252, 242, 222));
+    fg.setColorAt(0.85, COLOR_PARCHMENT);
+    fg.setColorAt(1.0, QColor(200, 180, 140));
     p.setBrush(fg);
     p.setPen(QPen(QColor(160, 120, 60), 1));
     p.drawEllipse(faceRect);
