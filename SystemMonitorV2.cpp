@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QDateTime>
 #include <QTime>
+#include <QCalendarWidget>
 #include <unistd.h>
 #include <cmath>
 #include <algorithm>
@@ -28,9 +29,9 @@ SystemMonitorV2::SystemMonitorV2(QWidget *parent)
 
     m_tickTimer = new QTimer(this);
     connect(m_tickTimer, &QTimer::timeout, this, &SystemMonitorV2::tick);
-    m_tickTimer->start(250);   // 250ms for sweeping second hand
+    m_tickTimer->start(250);   // 250ms tick → 4 Hz refresh (well under 1/s)
 
-    // Read RAM total once
+    // Read RAM total once at startup
     QFile fp("/proc/meminfo");
     if (fp.open(QFile::ReadOnly)) {
         QTextStream in(&fp);
@@ -38,18 +39,26 @@ SystemMonitorV2::SystemMonitorV2(QWidget *parent)
         while (in.readLineInto(&line)) {
             if (line.startsWith("MemTotal:")) {
                 double kb = line.section(' ', 1, 1).trimmed().toDouble();
-                m_ramTotalGB = kb / 1048576.0;
+                m_ramTotalGB = kb / 1048576.0;  // KiB → GiB
                 break;
             }
         }
     }
+    // Fallback to 64 GB if detection fails
+    if (m_ramTotalGB <= 0.0) m_ramTotalGB = 64.0;
+
+    // Prime the CPU counters so first tick has a valid delta
+    readCPU();
+
+    // Prime network connections map so first tick has previous values
+    readNetwork();
 }
 
 SystemMonitorV2::~SystemMonitorV2() = default;
 
 // ── UI Setup ───────────────────────────────────────────────────
 void SystemMonitorV2::setupUI() {
-    // ── Custom central widget that paints the wood panel background ──
+    // Custom central widget that paints the wood panel background
     class WoodPanelWidget : public QWidget {
     public:
         explicit WoodPanelWidget(QWidget *parent = nullptr) : QWidget(parent) {
@@ -158,13 +167,61 @@ void SystemMonitorV2::setupUI() {
     auto *clockRow = new QWidget();
     auto *clockLay = new QHBoxLayout(clockRow);
     clockLay->setContentsMargins(0, 0, 0, 0);
-    m_clockGauge = new SteamGauge("CLOCK", "HMS", 0, 60, 61);
-    m_clockGauge->setArc(270.0, 360.0);
-    m_clockGauge->setAnimDuration(0);
+    m_clockGauge = new SteamGauge("CLOCK", "HMS", 0, 60, 61);  // redThreshold=61 → never triggers on 0-60
+    m_clockGauge->setArc(270.0, 360.0);  // 12 o'clock at top
+    m_clockGauge->setAnimDuration(0);     // instant update for clock hands
     m_clockGauge->setNeedleBaseWidth(0.02);
     m_clockGauge->setSubtitle("");
     m_clockGauge->setFixedHeight(220);
-    clockLay->addWidget(m_clockGauge, 1);
+    clockLay->addWidget(m_clockGauge);
+
+    // Calendar widget to the right of clock
+    m_calendar = new QCalendarWidget();
+    m_calendar->setMinimumWidth(180);
+    m_calendar->setStyleSheet(
+        "QCalendarWidget {"
+        "  background: #2a1208;"
+        "  border: 1px solid #555;"
+        "  font-size: 10pt;"
+        "}"
+        "QCalendarWidget::weekday-header {"
+        "  background: #40301a;"
+        "  color: #e8c860;"
+        "  font-weight: bold;"
+        "  padding: 4px;"
+        "}"
+        "QCalendarWidget::day-number {"
+        "  color: #c8a050;"
+        "  font-weight: normal;"
+        "  padding: 4px;"
+        "}"
+        "QCalendarWidget::current-date {"
+        "  background: #b8860b;"
+        "  color: #2a1208;"
+        "  font-weight: bold;"
+        "}"
+        "QCalendarWidget::today {"
+        "  border: 2px solid #e8c860;"
+        "}"
+        "QCalendarWidget::navigation-bar {"
+        "  background: #b8860b;"
+        "  padding: 4px;"
+        "}"
+        "QCalendarWidget::button {"
+        "  background: #b8860b;"
+        "  border: 1px solid #c8a050;"
+        "  color: #2a1208;"
+        "  font-weight: bold;"
+        "  border-radius: 3px;"
+        "  padding: 2px 6px;"
+        "}"
+        "QCalendarWidget::button:hover {"
+        "  background: #d4a843;"
+        "  border: 1px solid #e8c860;"
+        "}"
+    );
+    clockLay->addWidget(m_calendar);
+
     mainLayout->addWidget(clockRow);
 
     // ── Gauge grid (3 rows × 4 cols) ──
@@ -174,35 +231,46 @@ void SystemMonitorV2::setupUI() {
     // Row 0: CPU & core
     m_cpuGauge = new SteamGauge("CPU", "%", 0, 100, 80);
     m_cpuGauge->setSubtitle("-- %");
+    m_cpuGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_cpuGauge, 0, 0);
 
     m_cpuTempGauge = new SteamGauge("CPU TEMP", "°C", 0, 100, 80);
     m_cpuTempGauge->setSubtitle("--°C");
+    m_cpuTempGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_cpuTempGauge, 0, 1);
 
-    m_ramGauge = new SteamGauge("RAM", "GB", 0, 64, 51);
+    // RAM gauge uses dynamically detected total RAM for max/red-zone
+    double ramMax = qMax(m_ramTotalGB, 64.0);
+    double ramRedZone = ramMax * 0.8;
+    m_ramGauge = new SteamGauge("RAM", "GB", 0, ramMax, ramRedZone);
     m_ramGauge->setSubtitle("-- / 64 GB");
+    m_ramGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_ramGauge, 0, 2);
 
     m_chassisGauge = new SteamGauge("CHASSIS", "°C", 0, 50, 40);
     m_chassisGauge->setSubtitle("--°C");
+    m_chassisGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_chassisGauge, 0, 3);
 
     // Row 1: iGPU (Radeon 780M)
     m_gpuGauge = new SteamGauge("M780 PERF", "%", 0, 100, 80);
     m_gpuGauge->setSubtitle("-- %");
+    m_gpuGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_gpuGauge, 1, 0);
 
     m_igpuTempGauge = new SteamGauge("M780 TEMP", "°C", 0, 100, 80);
     m_igpuTempGauge->setSubtitle("--°C");
+    m_igpuTempGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_igpuTempGauge, 1, 1);
 
-    m_gpuVramGauge = new SteamGauge("M780 VRAM", "GB", 0, 2, 2);
+    m_gpuVramGauge = new SteamGauge("M780 VRAM", "GB", 0, 2, 1.6);  // 2 GB shared VRAM, red at 80%
     m_gpuVramGauge->setSubtitle("-- GB");
+    m_gpuVramGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_gpuVramGauge, 1, 2);
 
     m_nvmeTempGauge = new SteamGauge("NVME TEMP", "°C", 0, 100, 80);
     m_nvmeTempGauge->setSubtitle("--°C");
+    m_nvmeTempGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_nvmeTempGauge, 1, 3);
 
     // Row 2: Network + RAM sticks
@@ -210,20 +278,24 @@ void SystemMonitorV2::setupUI() {
     m_wanGauge->setSubtitle("↓ --  ↑ --");
     m_wanGauge->setBezelColor(QColor(30, 100, 200));
     m_wanGauge->setNeedleColor(QColor(80, 160, 255));
+    m_wanGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_wanGauge, 2, 0);
 
     m_lanGauge = new SteamGauge("LAN", "Mbps", 0, 1000, 800);
     m_lanGauge->setSubtitle("↓ --  ↑ --");
     m_lanGauge->setBezelColor(QColor(30, 100, 200));
     m_lanGauge->setNeedleColor(QColor(80, 160, 255));
+    m_lanGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_lanGauge, 2, 1);
 
     m_dimmATempGauge = new SteamGauge("DIMM A", "°C", 0, 85, 68);
     m_dimmATempGauge->setSubtitle("--°C");
+    m_dimmATempGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_dimmATempGauge, 2, 2);
 
     m_dimmBTempGauge = new SteamGauge("DIMM B", "°C", 0, 85, 68);
     m_dimmBTempGauge->setSubtitle("--°C");
+    m_dimmBTempGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_dimmBTempGauge, 2, 3);
 
     // Equal row/column stretch so gauges fill the form
@@ -236,14 +308,21 @@ void SystemMonitorV2::setupUI() {
     auto *nvRow = new QWidget();
     auto *nvLay = new QHBoxLayout(nvRow);
     nvLay->setContentsMargins(0, 0, 0, 0);
-    nvLay->addStretch(1);
     m_nvGpuGauge = new SteamGauge("NVIDIA GEFORCE RTX 4060 Ti", "%", 0, 100, 80);
     m_nvGpuGauge->setSubtitle("-- % / --°C");
     m_nvGpuGauge->setFixedHeight(220);
-    m_nvGpuGauge->setBezelColor(QColor(118, 185, 0));
-    m_nvGpuGauge->setNeedleColor(QColor(255, 255, 255));
-    nvLay->addWidget(m_nvGpuGauge, 1);
-    nvLay->addStretch(1);
+    m_nvGpuGauge->setBezelColor(QColor(118, 185, 0));  // NVIDIA green
+    m_nvGpuGauge->setNeedleColor(QColor(255, 255, 255));  // white needle
+    nvLay->addWidget(m_nvGpuGauge);
+
+    // Token/TPS gauge placeholder to the right of NVIDIA
+    m_nvTpsGauge = new SteamGauge("NVIDIA TPS", "tps", 0, 1000, 800);
+    m_nvTpsGauge->setSubtitle("-- tokens/s");
+    m_nvTpsGauge->setFixedHeight(220);
+    m_nvTpsGauge->setBezelColor(QColor(118, 185, 0));
+    m_nvTpsGauge->setNeedleColor(QColor(255, 255, 255));
+    nvLay->addWidget(m_nvTpsGauge);
+
     mainLayout->addWidget(nvRow);
 
     // ── Rivet row at the very bottom ──
@@ -299,12 +378,19 @@ void SystemMonitorV2::keyPressEvent(QKeyEvent *event) {
 
 // ── Tick ───────────────────────────────────────────────────────
 void SystemMonitorV2::tick() {
+    // Read all sensors (non-blocking where possible)
     readCPU();
-    readNvidia();
     readRAM();
     readSensors();
     readNetwork();
 
+    // NVIDIA GPU is read asynchronously via QProcess to avoid blocking
+    readNvidiaAsync();
+
+    // Agent Pikey TPS (placeholder)
+    readAgentPikeyStats();
+
+    // Update all gauges
     // NVIDIA GPU (bottom row, dedicated)
     m_nvGpuGauge->setValue(m_nvGpuUsage);
     m_nvGpuGauge->setSubtitle(
@@ -321,8 +407,9 @@ void SystemMonitorV2::tick() {
 
     m_ramGauge->setValue(m_ramGB);
     m_ramGauge->setSubtitle(
-        QString("%1 / 64 GB")
-            .arg(m_ramGB, 0, 'f', 1));
+        QString("%1 / %2 GB")
+            .arg(m_ramGB, 0, 'f', 1)
+            .arg(m_ramTotalGB, 0, 'f', 0));
 
     m_chassisGauge->setValue(m_chassisTemp);
     m_chassisGauge->setSubtitle(QString("%1°C").arg(m_chassisTemp, 0, 'f', 0));
@@ -369,6 +456,13 @@ void SystemMonitorV2::tick() {
     m_clockGauge->setValue(sec);                               // second hand = primary needle (crimson, long)
     m_clockGauge->setSecondaryValue(min);                      // minute hand = amber secondary (65% length)
     m_clockGauge->setTertiaryValue(hour);                      // hour hand = gold tertiary (50% length)
+
+    // Highlight today's date on calendar
+    m_calendar->setSelectedDate(QDate::currentDate());
+
+    // Agent Pikey TPS gauge
+    m_nvTpsGauge->setValue(m_nvGpuTps);
+    m_nvTpsGauge->setSubtitle(QString("%1 tokens/s").arg(m_nvGpuTps, 0, 'f', 1));
 }
 
 // ── CPU ────────────────────────────────────────────────────────
@@ -378,40 +472,57 @@ void SystemMonitorV2::readCPU() {
         QString line = QString::fromUtf8(f.readLine()).trimmed();
         if (line.startsWith("cpu ")) {
             auto parts = line.split(' ', Qt::SkipEmptyParts);
-            if (parts.size() >= 5) {
-                unsigned long long user = parts[1].toULongLong();
-                unsigned long long nice = parts[2].toULongLong();
-                unsigned long long sys = parts[3].toULongLong();
-                unsigned long long idle = parts[4].toULongLong();
-                unsigned long long total = user + nice + sys + idle;
+            if (parts.size() >= 8) {
+                unsigned long long user   = parts[1].toULongLong();
+                unsigned long long nice   = parts[2].toULongLong();
+                unsigned long long sys    = parts[3].toULongLong();
+                unsigned long long idle   = parts[4].toULongLong();
+                unsigned long long iowait = parts[5].toULongLong();
+                // irq = parts[6], softirq = parts[7] — not used in idle calc
+                unsigned long long total = user + nice + sys + idle + iowait;
+                unsigned long long idleTotal = idle + iowait;
 
                 if (m_prevTotal > 0) {
-                    unsigned long long dIdle = idle - m_prevIdle;
+                    unsigned long long dIdle  = idleTotal - m_prevIdle;
                     unsigned long long dTotal = total - m_prevTotal;
                     m_cpuUsage = (dTotal > 0) ? (1.0 - (double)dIdle / dTotal) * 100.0 : 0.0;
                 }
-                m_prevIdle = idle;
+                m_prevIdle  = idleTotal;
                 m_prevTotal = total;
             }
         }
     }
 }
 
-// ── NVIDIA GPU ────────────────────────────────────────────────
-void SystemMonitorV2::readNvidia() {
-    QProcess proc;
-    proc.start("nvidia-smi",
-        QStringList() << "--query-gpu=utilization.gpu,temperature.gpu"
-                      << "--format=csv,noheader,nounits");
-    proc.waitForFinished(3000);
-    QString out = proc.readAllStandardOutput().trimmed();
-    if (!out.isEmpty()) {
-        QStringList parts = out.split(',');
-        if (parts.size() >= 2) {
-            m_nvGpuUsage = parts[0].trimmed().toDouble();
-            m_nvGpuTemp  = parts[1].trimmed().toDouble();
-        }
+// ── NVIDIA GPU (async, non-blocking) ───────────────────────────
+void SystemMonitorV2::readNvidiaAsync() {
+    // Use member QProcess that persists across ticks; start a new read
+    // only when the previous one has finished. This avoids blocking the UI.
+    if (!m_nvidiaProc) {
+        m_nvidiaProc = new QProcess(this);
+        connect(m_nvidiaProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this](int, QProcess::ExitStatus) {
+                    QString out = m_nvidiaProc->readAllStandardOutput().trimmed();
+                    if (!out.isEmpty()) {
+                        QStringList parts = out.split(',');
+                        if (parts.size() >= 2) {
+                            m_nvGpuUsage = parts[0].trimmed().toDouble();
+                            m_nvGpuTemp  = parts[1].trimmed().toDouble();
+                        }
+                    }
+                    m_nvidiaPending = false;
+                    m_nvidiaProc->deleteLater();
+                    m_nvidiaProc = nullptr;
+                });
     }
+
+    if (!m_nvidiaPending) {
+        m_nvidiaPending = true;
+        m_nvidiaProc->start("nvidia-smi",
+            QStringList() << "--query-gpu=utilization.gpu,temperature.gpu"
+                          << "--format=csv,noheader,nounits");
+    }
+    // If pending, we keep the previous values (smooth update on next completion)
 }
 
 // ── RAM ────────────────────────────────────────────────────────
@@ -433,52 +544,40 @@ void SystemMonitorV2::readRAM() {
 
 // ── Sensors ────────────────────────────────────────────────────
 void SystemMonitorV2::readSensors() {
-    // Read CPU temp from k10temp hwmon
+    // Reset temps each tick; we'll overwrite if found
     m_cpuTemp = 0.0;
+    m_nvmeTemp = 0.0;
+    m_igpuTemp = 0.0;
+    m_chassisTemp = 0.0;
+    m_ethTemp = 0.0;
+
+    // Single pass through hwmon0..9 to find all sensors
     for (int h = 0; h < 10; ++h) {
         QFile nf(QString("/sys/class/hwmon/hwmon%1/name").arg(h));
         if (!nf.open(QFile::ReadOnly)) continue;
         QString name = QString::fromUtf8(nf.readAll()).trimmed();
         nf.close();
 
+        QFile tf(QString("/sys/class/hwmon/hwmon%1/temp1_input").arg(h));
+        if (!tf.open(QFile::ReadOnly)) continue;
+        double temp = QString::fromUtf8(tf.readAll()).trimmed().toDouble() / 1000.0;
+        tf.close();
+
         if (name == "k10temp") {
-            QFile tf(QString("/sys/class/hwmon/hwmon%1/temp1_input").arg(h));
-            if (tf.open(QFile::ReadOnly)) {
-                m_cpuTemp = QString::fromUtf8(tf.readAll()).trimmed().toDouble() / 1000.0;
-                tf.close();
-            }
-        }
-        else if (name == "nvme") {
-            QFile tf(QString("/sys/class/hwmon/hwmon%1/temp1_input").arg(h));
-            if (tf.open(QFile::ReadOnly)) {
-                m_nvmeTemp = QString::fromUtf8(tf.readAll()).trimmed().toDouble() / 1000.0;
-                tf.close();
-            }
-        }
-        else if (name == "amdgpu") {
-            QFile tf(QString("/sys/class/hwmon/hwmon%1/temp1_input").arg(h));
-            if (tf.open(QFile::ReadOnly)) {
-                m_igpuTemp = QString::fromUtf8(tf.readAll()).trimmed().toDouble() / 1000.0;
-                tf.close();
-            }
-        }
-        else if (name == "acpitz") {
-            QFile tf(QString("/sys/class/hwmon/hwmon%1/temp1_input").arg(h));
-            if (tf.open(QFile::ReadOnly)) {
-                m_chassisTemp = QString::fromUtf8(tf.readAll()).trimmed().toDouble() / 1000.0;
-                tf.close();
-            }
-        }
-        else if (name == "r8169" || name.contains("r8169")) {
-            QFile tf(QString("/sys/class/hwmon/hwmon%1/temp1_input").arg(h));
-            if (tf.open(QFile::ReadOnly)) {
-                m_ethTemp = QString::fromUtf8(tf.readAll()).trimmed().toDouble() / 1000.0;
-                tf.close();
-            }
+            m_cpuTemp = temp;
+        } else if (name == "nvme") {
+            m_nvmeTemp = temp;
+        } else if (name == "amdgpu") {
+            m_igpuTemp = temp;
+        } else if (name == "acpitz") {
+            m_chassisTemp = temp;
+        } else if (name == "r8169" || name.contains("r8169")) {
+            m_ethTemp = temp;
         }
     }
 
-    // Read DIMM temps from SPD5118 (hwmon4 = DIMM A, hwmon5 = DIMM B)
+    // Read DIMM temps from SPD5118 (usually hwmon4 = DIMM A, hwmon5 = DIMM B)
+    int spdCount = 0;
     for (int h = 0; h < 10; ++h) {
         QFile nf(QString("/sys/class/hwmon/hwmon%1/name").arg(h));
         if (!nf.open(QFile::ReadOnly)) continue;
@@ -486,38 +585,18 @@ void SystemMonitorV2::readSensors() {
         nf.close();
 
         if (name == "spd5118") {
-            // Read the i2c address to distinguish DIMM A vs B
-            QString devPath = QFileInfo(QString("/sys/class/hwmon/hwmon%1").arg(h)).canonicalPath();
             QFile tf(QString("/sys/class/hwmon/hwmon%1/temp1_input").arg(h));
-            if (!tf.open(QFile::ReadOnly)) continue;
-            double temp = QString::fromUtf8(tf.readAll()).trimmed().toDouble() / 1000.0;
-            tf.close();
-
-            // The hwmon numbering is stable: first spd5118 = DIMM A, second = DIMM B
-            if (m_dimmATemp == 0.0) {
-                m_dimmATemp = temp;
-            } else if (m_dimmBTemp == 0.0) {
-                m_dimmBTemp = temp;
+            if (tf.open(QFile::ReadOnly)) {
+                double temp = QString::fromUtf8(tf.readAll()).trimmed().toDouble() / 1000.0;
+                tf.close();
+                if (spdCount == 0) {
+                    m_dimmATemp = temp;
+                } else if (spdCount == 1) {
+                    m_dimmBTemp = temp;
+                }
+                spdCount++;
             }
         }
-    }
-
-    // GPU usage — read from amdgpu
-    m_gpuUsage = 0.0;
-    m_gpuTemp = m_igpuTemp;
-    QFile gpuBusyF("/sys/devices/pci0000:00/0000:00:08.1/0000:c4:00.0/gpu_busy_percent");
-    if (gpuBusyF.open(QFile::ReadOnly)) {
-        m_gpuUsage = QString::fromUtf8(gpuBusyF.readAll()).trimmed().toDouble();
-        gpuBusyF.close();
-    }
-
-    // AMD GPU VRAM usage — Radeon 780M (iGPU, 1 GB reserved)
-    m_gpuVramGB = 0.0;
-    QFile vramF("/sys/devices/pci0000:00/0000:00:08.1/0000:c4:00.0/mem_info_vram_used");
-    if (vramF.open(QFile::ReadOnly)) {
-        double usedBytes = QString::fromUtf8(vramF.readAll()).trimmed().toDouble();
-        m_gpuVramGB = usedBytes / 1073741824.0;
-        vramF.close();
     }
 }
 
@@ -560,27 +639,37 @@ void SystemMonitorV2::readNetwork() {
                         unsigned long long dRx = rx - it->second.rx;
                         unsigned long long dTx = tx - it->second.tx;
 
-                        bool isPrivate = false;
+                        // Skip localhost
                         if (peerAddr == "127.0.0.1" || peerAddr == "::1")
                             continue;
-                        if (peerAddr.startsWith("10.") ||
-                            peerAddr.startsWith("192.168.") ||
-                            (peerAddr.startsWith("172.") && peerAddr.section('.', 1, 1).toInt() >= 16 && peerAddr.section('.', 1, 1).toInt() <= 31) ||
-                            peerAddr.startsWith("fc") || peerAddr.startsWith("fd") ||
-                            peerAddr.startsWith("fe80"))
+
+                        // Classify as private (LAN) vs public (WAN) based on peer IP
+                        bool isPrivate = false;
+                        QString remoteIp = peerAddr.section(':', 0, -2);  // strip port
+                        if (remoteIp.startsWith('[')) {
+                            // IPv6 bracket notation: [::1]:port
+                            remoteIp = remoteIp.mid(1, remoteIp.lastIndexOf(']') - 1);
+                        }
+                        if (remoteIp.startsWith("10.") ||
+                            remoteIp.startsWith("192.168.") ||
+                            (remoteIp.startsWith("172.") && remoteIp.section('.', 1, 1).toInt() >= 16 && remoteIp.section('.', 1, 1).toInt() <= 31) ||
+                            remoteIp.startsWith("fc") || remoteIp.startsWith("fd") ||
+                            remoteIp.startsWith("fe80"))
                             isPrivate = true;
 
-                        double speedMbpsRx = dRx * 8.0 / 1000000.0;
-                        double speedMbpsTx = dTx * 8.0 / 1000000.0;
+                        // Convert bytes per 250ms tick → Mbps
+                        const double intervalSec = 0.25;  // 250 ms tick
+                        double speedMbpsRx = (dRx * 8.0 / 1'000'000.0) / intervalSec;
+                        double speedMbpsTx = (dTx * 8.0 / 1'000'000.0) / intervalSec;
 
                         if (isPrivate) {
                             lanDown += speedMbpsRx;
-                            lanUp += speedMbpsTx;
+                            lanUp   += speedMbpsTx;
                             m_cumLanRx += dRx;
                             m_cumLanTx += dTx;
                         } else {
                             wanDown += speedMbpsRx;
-                            wanUp += speedMbpsTx;
+                            wanUp   += speedMbpsTx;
                             m_cumWanRx += dRx;
                             m_cumWanTx += dTx;
                         }
@@ -595,4 +684,20 @@ void SystemMonitorV2::readNetwork() {
     m_lanDown = lanDown;
     m_lanUp = lanUp;
     m_prevConns = std::move(curConns);
+}
+
+// ── Agent Pikey Token Stats ───────────────────────────────────
+void SystemMonitorV2::readAgentPikeyStats() {
+    // Call the measure_tps.py script to get current TPS from Ollama
+    QProcess proc;
+    proc.start("python3", QStringList() << "/home/sfarrant/sysmonv2/measure_tps.py");
+    proc.waitForFinished(5000);
+    QString out = proc.readAllStandardOutput().trimmed();
+    if (!out.isEmpty()) {
+        bool ok = false;
+        double tps = out.toDouble(&ok);
+        if (ok) {
+            m_nvGpuTps = tps;
+        }
+    }
 }

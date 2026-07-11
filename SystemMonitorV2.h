@@ -10,7 +10,10 @@
 #include <QVector>
 #include <QJsonObject>
 #include <deque>
+#include <map>
+#include <QString>
 #include "SteamGauge.h"
+#include <QCalendarWidget>
 
 /// SysmonV2 — Steampunk analog-dial system monitor.
 class SystemMonitorV2 : public QMainWindow {
@@ -31,9 +34,11 @@ private:
     void setupStyle();
     void readCPU();
     void readNvidia();
+    void readNvidiaAsync();
     void readRAM();
     void readSensors();
     void readNetwork();
+    void readAgentPikeyStats();
 
     // ── Data ──
     double m_cpuUsage = 0.0;
@@ -43,6 +48,7 @@ private:
     double m_gpuVramGB = 0.0;
     double m_nvGpuUsage = 0.0;
     double m_nvGpuTemp = 0.0;
+    double m_nvGpuTps = 0.0;  // tokens per second placeholder
     double m_nvmeTemp = 0.0;
     double m_igpuTemp = 0.0;
     double m_dimmATemp = 0.0;
@@ -55,6 +61,10 @@ private:
     double m_wanUp = 0.0;
     double m_lanDown = 0.0;
     double m_lanUp = 0.0;
+
+    // NVIDIA async reading state
+    QProcess *m_nvidiaProc = nullptr;
+    bool m_nvidiaPending = false;
 
     unsigned long long m_prevIdle = 0, m_prevTotal = 0;
 
@@ -79,6 +89,10 @@ private:
     SteamGauge *m_ethTempGauge = nullptr;
     SteamGauge *m_chassisGauge = nullptr;
     SteamGauge *m_clockGauge = nullptr;
+
+    // ── Calendar widget ──
+    QCalendarWidget *m_calendar = nullptr;
+    SteamGauge *m_nvTpsGauge = nullptr;  // tokens per second gauge
 
     // ── Timer ──
     QTimer *m_tickTimer = nullptr;
