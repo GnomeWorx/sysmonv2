@@ -66,6 +66,10 @@ private:
     QProcess *m_nvidiaProc = nullptr;
     bool m_nvidiaPending = false;
 
+    // Agent Pikey TPS async reading state
+    QProcess *m_tpsProc = nullptr;
+    bool m_tpsPending = false;
+
     unsigned long long m_prevIdle = 0, m_prevTotal = 0;
 
     struct Conn { unsigned long long rx, tx; };

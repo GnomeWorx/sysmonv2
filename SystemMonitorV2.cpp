@@ -686,18 +686,29 @@ void SystemMonitorV2::readNetwork() {
     m_prevConns = std::move(curConns);
 }
 
-// ── Agent Pikey Token Stats ───────────────────────────────────
+// ── Agent Pikey Token Stats (async, non-blocking) ────────────────
 void SystemMonitorV2::readAgentPikeyStats() {
-    // Call the measure_tps.py script to get current TPS from Ollama
-    QProcess proc;
-    proc.start("python3", QStringList() << "/home/sfarrant/sysmonv2/measure_tps.py");
-    proc.waitForFinished(5000);
-    QString out = proc.readAllStandardOutput().trimmed();
-    if (!out.isEmpty()) {
-        bool ok = false;
-        double tps = out.toDouble(&ok);
-        if (ok) {
-            m_nvGpuTps = tps;
-        }
+    if (!m_tpsProc) {
+        m_tpsProc = new QProcess(this);
+        connect(m_tpsProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this](int, QProcess::ExitStatus) {
+                    QString out = m_tpsProc->readAllStandardOutput().trimmed();
+                    if (!out.isEmpty()) {
+                        bool ok = false;
+                        double tps = out.toDouble(&ok);
+                        if (ok) {
+                            m_nvGpuTps = tps;
+                        }
+                    }
+                    m_tpsPending = false;
+                    m_tpsProc->deleteLater();
+                    m_tpsProc = nullptr;
+                });
     }
+
+    if (!m_tpsPending) {
+        m_tpsPending = true;
+        m_tpsProc->start("python3", QStringList() << "/home/sfarrant/sysmonv2/measure_tps.py");
+    }
+    // If pending, keep previous value (smooth update on next completion)
 }
