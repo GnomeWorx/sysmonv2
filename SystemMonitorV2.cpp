@@ -10,6 +10,8 @@
 #include <QPalette>
 #include <QDir>
 #include <QFileInfo>
+#include <QKeyEvent>
+#include <QGraphicsDropShadowEffect>
 #include <unistd.h>
 #include <cmath>
 #include <algorithm>
@@ -50,25 +52,79 @@ void SystemMonitorV2::setupUI() {
     mainLayout->setContentsMargins(6, 6, 6, 6);
     mainLayout->setSpacing(6);
 
-    // ── Title bar ──
+    // ── Brass plate title bar ──
     auto *titleBar = new QWidget();
     auto *titleLay = new QHBoxLayout(titleBar);
-    titleLay->setContentsMargins(4, 2, 4, 2);
+    titleLay->setContentsMargins(8, 6, 8, 6);
 
-    auto *titleLabel = new QLabel("SYSMON V2");
+    titleBar->setAutoFillBackground(true);
+    QPalette brassPal;
+    brassPal.setColor(QPalette::Window, QColor(60, 42, 18));
+    titleBar->setPalette(brassPal);
+    titleBar->setStyleSheet(
+        "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+        "  stop:0 #8b6914, stop:0.3 #b8860b, stop:0.6 #a07010, "
+        "  stop:0.85 #6b4e0a, stop:1 #3d2a06);"
+        "border: 1px solid #d4a843;"
+        "border-radius: 4px;"
+    );
+
+    auto *plateShadow = new QGraphicsDropShadowEffect();
+    plateShadow->setBlurRadius(8);
+    plateShadow->setOffset(2, 2);
+    plateShadow->setColor(QColor(0, 0, 0, 120));
+    titleBar->setGraphicsEffect(plateShadow);
+
+    auto *titleLabel = new QLabel("THE CHRONOMETRIC ENGINE MONITOR");
     QFont tf = titleLabel->font();
-    tf.setPointSize(13);
+    tf.setPointSize(12);
     tf.setBold(true);
-    tf.setLetterSpacing(QFont::AbsoluteSpacing, 3);
+    tf.setLetterSpacing(QFont::AbsoluteSpacing, 5);
+    tf.setCapitalization(QFont::SmallCaps);
     titleLabel->setFont(tf);
-    titleLabel->setStyleSheet("color: #d4a843; padding: 2px;");
-    titleLay->addWidget(titleLabel);
-    titleLay->addStretch();
+    titleLabel->setAlignment(Qt::AlignCenter);
+    titleLabel->setStyleSheet(
+        "color: #e8c860;"
+        "background: transparent;"
+        "padding: 2px 12px;"
+        "font-weight: bold;"
+    );
 
-    auto *versionLabel = new QLabel("sysmonv2  (c) GnomeWorx 2026");
-    versionLabel->setStyleSheet("color: #887a5a; font-size: 9px;");
-    titleLay->addWidget(versionLabel);
+    auto *textShadow = new QGraphicsDropShadowEffect();
+    textShadow->setBlurRadius(2);
+    textShadow->setOffset(1, 1);
+    textShadow->setColor(QColor(0, 0, 0, 100));
+    titleLabel->setGraphicsEffect(textShadow);
+
+    titleLay->addStretch(1);
+    titleLay->addWidget(titleLabel, 0, Qt::AlignCenter);
+    titleLay->addStretch(1);
     mainLayout->addWidget(titleBar);
+
+    // ── Rivet row across the top of the panel ──
+    auto *rivetRow = new QWidget();
+    auto *rivetLay = new QHBoxLayout(rivetRow);
+    rivetLay->setContentsMargins(0, 0, 0, 0);
+    rivetLay->setSpacing(0);
+    auto addRivet = [&]() {
+        auto *rivet = new QLabel();
+        rivet->setFixedSize(10, 10);
+        rivet->setStyleSheet(
+            "background: qradialgradient(cx:0.35, cy:0.35, radius:0.5, "
+            "  fx:0.35, fy:0.35, "
+            "  stop:0 #f0d080, stop:0.4 #c8a050, "
+            "  stop:0.7 #8a6520, stop:1 #4a3510);"
+            "border: 1px solid #3d2a06;"
+            "border-radius: 5px;"
+        );
+        rivetLay->addWidget(rivet);
+        rivetLay->addStretch(1);
+    };
+    for (int i = 0; i < 12; ++i) {
+        if (i > 0) rivetLay->addSpacing(4);
+        addRivet();
+    }
+    mainLayout->addWidget(rivetRow);
 
     // ── Gauge grid (3 rows × 4 cols) ──
     auto *gaugeGrid = new QGridLayout();
@@ -143,22 +199,30 @@ void SystemMonitorV2::setupUI() {
 
     mainLayout->addLayout(gaugeGrid, 1);
 
-    // ── Footer ──
-    auto *footer = new QLabel("(c) GnomeWorx 2026  v2.0.0");
-    footer->setStyleSheet("color: #443322; font-size: 8px; padding: 2px;");
-    footer->setAlignment(Qt::AlignRight);
-    mainLayout->addWidget(footer);
-
     setMinimumSize(900, 650);
     resize(1000, 760);
-    setWindowTitle("SysmonV2");
+    setWindowTitle("Chronometric Engine Monitor");
 }
 
 void SystemMonitorV2::setupStyle() {
     setStyleSheet(
-        "QMainWindow { background: #1a1410; }"
-        "QWidget { background: #1a1410; }"
+        "QMainWindow { background: #2a1208; }"
+        "QWidget { background: #2a1208; }"
     );
+}
+
+// ── F11 Fullscreen ─────────────────────────────────────────────
+void SystemMonitorV2::keyPressEvent(QKeyEvent *event) {
+    if (event->key() == Qt::Key_F11) {
+        if (isFullScreen()) {
+            showNormal();
+        } else {
+            showFullScreen();
+        }
+        event->accept();
+        return;
+    }
+    QMainWindow::keyPressEvent(event);
 }
 
 // ── Tick ───────────────────────────────────────────────────────
@@ -412,108 +476,4 @@ void SystemMonitorV2::readNetwork() {
     m_lanDown = lanDown;
     m_lanUp = lanUp;
     m_prevConns = std::move(curConns);
-}
-
-// ── Processes ──────────────────────────────────────────────────
-void SystemMonitorV2::readProcesses() {
-    m_procs.clear();
-
-    QDir procDir("/proc");
-    auto entries = procDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-
-    for (const auto &entry : entries) {
-        bool ok;
-        int pid = entry.toInt(&ok);
-        if (!ok) continue;
-
-        ProcRow row;
-        row.pid = pid;
-
-        QFile commFile(QString("/proc/%1/comm").arg(pid));
-        if (commFile.open(QFile::ReadOnly)) {
-            row.name = QString::fromUtf8(commFile.readAll()).trimmed();
-        } else continue;
-
-        QFile statFile(QString("/proc/%1/stat").arg(pid));
-        if (statFile.open(QFile::ReadOnly)) {
-            QString stat = QString::fromUtf8(statFile.readAll());
-            int closeParen = stat.lastIndexOf(')');
-            if (closeParen > 0) {
-                QStringList fields = stat.mid(closeParen + 2).split(' ');
-                if (fields.size() > 13) {
-                    unsigned long long utime = fields[11].toULongLong();
-                    unsigned long long stime = fields[12].toULongLong();
-                    static std::map<int, std::pair<unsigned long long, unsigned long long>> prevTimes;
-                    auto it = prevTimes.find(pid);
-                    if (it != prevTimes.end()) {
-                        unsigned long long dUser = utime - it->second.first;
-                        unsigned long long dKern = stime - it->second.second;
-                        double ticksPerSec = sysconf(_SC_CLK_TCK);
-                        row.cpu = (dUser + dKern) * 100.0 / ticksPerSec;
-                    }
-                    prevTimes[pid] = {utime, stime};
-                }
-            }
-        }
-
-        QFile statusFile(QString("/proc/%1/status").arg(pid));
-        if (statusFile.open(QFile::ReadOnly)) {
-            QString content = QString::fromUtf8(statusFile.readAll());
-            QRegularExpression vmRe(R"(VmRSS:\s+(\d+)\s+kB)");
-            auto vmM = vmRe.match(content);
-            if (vmM.hasMatch())
-                row.memKb = vmM.captured(1).toLong();
-        }
-
-        m_procs.append(row);
-    }
-
-    std::sort(m_procs.begin(), m_procs.end(),
-              [](const ProcRow &a, const ProcRow &b) { return a.cpu > b.cpu; });
-    if (m_procs.size() > 12) m_procs.resize(12);
-
-    // Rebuild process list UI
-    QLayoutItem *child;
-    while ((child = m_processLayout->takeAt(0)) != nullptr) {
-        if (child->widget()) child->widget()->deleteLater();
-        delete child;
-    }
-
-    auto *hName = new QLabel("PROCESS");
-    hName->setStyleSheet("color: #887a5a; font-size: 8px; font-weight: bold;");
-    auto *hCpu = new QLabel("CPU");
-    hCpu->setStyleSheet("color: #887a5a; font-size: 8px; font-weight: bold;");
-    hCpu->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    auto *hMem = new QLabel("MEM");
-    hMem->setStyleSheet("color: #887a5a; font-size: 8px; font-weight: bold;");
-    hMem->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_processLayout->addWidget(hName, 0, 0);
-    m_processLayout->addWidget(hCpu, 0, 1);
-    m_processLayout->addWidget(hMem, 0, 2);
-    m_processLayout->setColumnStretch(0, 1);
-    m_processLayout->setColumnStretch(1, 0);
-    m_processLayout->setColumnStretch(2, 0);
-
-    for (int i = 0; i < m_procs.size(); ++i) {
-        auto &proc = m_procs[i];
-        auto *nameLabel = new QLabel(proc.name);
-        nameLabel->setStyleSheet("color: #aabbcc; font-size: 9px;");
-        nameLabel->setTextFormat(Qt::PlainText);
-
-        auto *cpuLabel = new QLabel(QString("%1%").arg(proc.cpu, 0, 'f', 0));
-        cpuLabel->setStyleSheet(
-            QString("color: %1; font-size: 9px; font-family: monospace;")
-                .arg(proc.cpu < 25 ? "#3a9b6a" : proc.cpu < 50 ? "#d48a10" : proc.cpu < 75 ? "#c06838" : "#b83428"));
-        cpuLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-        auto *memLabel = new QLabel(QString("%1 MB").arg(proc.memKb / 1024));
-        memLabel->setStyleSheet("color: #889; font-size: 9px; font-family: monospace;");
-        memLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-        m_processLayout->addWidget(nameLabel, i + 1, 0);
-        m_processLayout->addWidget(cpuLabel, i + 1, 1);
-        m_processLayout->addWidget(memLabel, i + 1, 2);
-    }
-
-    m_processLayout->setRowStretch(m_procs.size() + 1, 1);
 }

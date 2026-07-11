@@ -23,6 +23,9 @@ public:
 private slots:
     void tick();
 
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+
 private:
     void setupUI();
     void setupStyle();
@@ -30,7 +33,6 @@ private:
     void readRAM();
     void readSensors();
     void readNetwork();
-    void readProcesses();
 
     // ── Data ──
     double m_cpuUsage = 0.0;
@@ -42,7 +44,6 @@ private:
     double m_dimmATemp = 0.0;
     double m_dimmBTemp = 0.0;
     double m_ethTemp = 0.0;
-    double m_wifiTemp = 0.0;
     double m_chassisTemp = 0.0;
     double m_ramGB = 0.0;
     double m_ramTotalGB = 0.0;
@@ -51,14 +52,9 @@ private:
     double m_lanDown = 0.0;
     double m_lanUp = 0.0;
 
-    // Previous CPU ticks for delta calc
     unsigned long long m_prevIdle = 0, m_prevTotal = 0;
 
-    // Network connection tracking
-    struct Conn {
-        unsigned long long rx;
-        unsigned long long tx;
-    };
+    struct Conn { unsigned long long rx, tx; };
     std::map<QString, Conn> m_prevConns;
     unsigned long long m_cumWanRx = 0, m_cumWanTx = 0;
     unsigned long long m_cumLanRx = 0, m_cumLanTx = 0;
@@ -77,18 +73,7 @@ private:
     SteamGauge *m_ethTempGauge = nullptr;
     SteamGauge *m_chassisGauge = nullptr;
 
-    // Process list
-    struct ProcRow {
-        int pid;
-        QString name;
-        double cpu;
-        long memKb;
-    };
-    QWidget *m_processContainer = nullptr;
-    QGridLayout *m_processLayout = nullptr;
-    QVector<ProcRow> m_procs;
-
-    // ── Timers ──
+    // ── Timer ──
     QTimer *m_tickTimer = nullptr;
 };
 

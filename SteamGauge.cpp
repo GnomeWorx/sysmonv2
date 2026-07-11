@@ -26,6 +26,9 @@ static const QColor COLOR_RIVET(192, 160, 96);          // #c0a060
 static const QColor COLOR_GOLD_TEXT(212, 168, 67);      // #d4a843
 static const QColor COLOR_ENGRAVED(42, 31, 20);         // #2a1f14
 
+// Static wood texture pointer — lazily allocated on first paint
+QPixmap *SteamGauge::m_woodTexture = nullptr;
+
 // ── Constructor ────────────────────────────────────────────────
 SteamGauge::SteamGauge(const QString &title,
                        const QString &unit,
@@ -148,7 +151,21 @@ void SteamGauge::paintEvent(QPaintEvent *) {
     QRectF gaugeRect(gx + shakeX, gy + shakeY, gaugeSize, gaugeSize);
 
     // ── Background (wood panel) ──
-    p.fillRect(rect(), COLOR_WOOD);
+    // Tile the oak veneer texture as the board (lazy-load on first paint)
+    if (!m_woodTexture) {
+        m_woodTexture = new QPixmap("/home/sfarrant/oak_veneer_16x9_4k.jpg");
+        if (!m_woodTexture->isNull())
+            m_woodTexture->setDevicePixelRatio(1.0);
+    }
+    if (m_woodTexture && !m_woodTexture->isNull()) {
+        p.drawTiledPixmap(rect(), *m_woodTexture);
+        // Mahogany stain: deep warm brown overlay
+        p.fillRect(rect(), QColor(50, 18, 6, 120));
+        // Additional dark vignette at edges for depth
+        p.fillRect(rect(), QColor(0, 0, 0, 50));
+    } else {
+        p.fillRect(rect(), COLOR_WOOD);  // fallback
+    }
 
     // ── Draw components (background layers first) ──
     drawBrassRing(p, gaugeRect);
