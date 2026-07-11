@@ -1,0 +1,7 @@
+build/
+*.o
+*.o.d
+moc_*
+mocs_compilation.cpp
+qt_catch
+.DS_Store
