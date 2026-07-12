@@ -559,31 +559,51 @@ void SteamGauge::drawGlassOverlay(QPainter &p, const QRectF &rect) {
 }
 
 void SteamGauge::drawTitle(QPainter &p, const QRectF &rect) {
-    // Title on the dial face, ~1/3 down from top of the inner face
-    QFont f = font();
-    f.setPointSize(10);
-    f.setBold(true);
-    f.setLetterSpacing(QFont::AbsoluteSpacing, 1.5);
-    p.setFont(f);
-
+    // Title on the dial face, ~1/3 down from top of the inner face.
+    // Rendered over up to two lines so long names (e.g. "SYSTEM RAM",
+    // "LOCAL GPU TEMP") stay readable and don't clip the dial.
     double ringW = rect.width() * RING_WIDTH_RATIO;
     QRectF faceRect = rect.adjusted(ringW + 4, ringW + 4, -(ringW + 4), -(ringW + 4));
 
     double cx = faceRect.center().x();
-    double cy = faceRect.top() + faceRect.height() * 0.28;
+    double cy = faceRect.top() + faceRect.height() * 0.26;
 
-    QRectF titleRect(cx - 60, cy - 10, 120, 20);
+    // Split the title into two balanced lines on word boundaries.
+    QStringList words = m_title.split(' ');
+    QString line1, line2;
+    if (words.size() <= 1) {
+        line1 = m_title;
+    } else {
+        int mid = (words.size() + 1) / 2;   // upper line gets the longer half
+        line1 = words.mid(0, mid).join(" ");
+        line2 = words.mid(mid).join(" ");
+    }
+
+    QFont f = font();
+    f.setPointSize(10);
+    f.setBold(true);
+    f.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+    p.setFont(f);
     p.setPen(QPen(COLOR_GOLD_TEXT));
-    p.drawText(titleRect, Qt::AlignCenter, m_title);
 
-    // Small unit text beneath title on the dial face
+    if (line2.isEmpty()) {
+        QRectF titleRect(cx - 70, cy - 9, 140, 18);
+        p.drawText(titleRect, Qt::AlignCenter, line1);
+    } else {
+        QRectF l1Rect(cx - 70, cy - 18, 140, 16);
+        p.drawText(l1Rect, Qt::AlignCenter, line1);
+        QRectF l2Rect(cx - 70, cy - 1, 140, 16);
+        p.drawText(l2Rect, Qt::AlignCenter, line2);
+    }
+
+    // Small unit text beneath the title on the dial face
     if (m_unit != "HMS") {  // clock has no unit label needed
         QFont uf = font();
         uf.setPointSize(7);
         uf.setBold(false);
         p.setFont(uf);
         p.setPen(QColor(160, 130, 60));
-        QRectF unitRect(cx - 60, cy + 10, 120, 14);
+        QRectF unitRect(cx - 60, cy + 16, 120, 14);
         p.drawText(unitRect, Qt::AlignCenter, m_unit);
     }
 }

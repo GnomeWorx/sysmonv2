@@ -16,7 +16,6 @@
 #include <QDateTime>
 #include <QTime>
 #include <QMap>
-#include <QCalendarWidget>
 #include <QRandomGenerator>
 #include <unistd.h>
 #include <cmath>
@@ -34,8 +33,11 @@ SystemMonitorV2::SystemMonitorV2(QWidget *parent)
         QString line;
         while (in.readLineInto(&line)) {
             if (line.startsWith("MemTotal:")) {
-                double kb = line.section(' ', 1, 1).trimmed().toDouble();
-                m_ramTotalGB = kb / 1048576.0;  // KiB → GiB
+                // /proc/meminfo pads with spaces: "MemTotal:       64582344 kB"
+                // so take the first non-empty token after the label.
+                auto parts = line.split(' ', Qt::SkipEmptyParts);
+                if (parts.size() >= 2)
+                    m_ramTotalGB = parts[1].toDouble() / 1048576.0;  // KiB → GiB
                 break;
             }
         }
@@ -169,7 +171,7 @@ void SystemMonitorV2::setupUI() {
     }
     mainLayout->addWidget(rivetRow);
 
-    // ── Clock row (full width, above gauge grid) ──
+    // ── Clock row (centered at top, full width) ──
     auto *clockRow = new QWidget();
     auto *clockLay = new QHBoxLayout(clockRow);
     clockLay->setContentsMargins(0, 0, 0, 0);
@@ -178,55 +180,10 @@ void SystemMonitorV2::setupUI() {
     m_clockGauge->setAnimDuration(0);     // instant update for clock hands
     m_clockGauge->setNeedleBaseWidth(0.02);
     m_clockGauge->setSubtitle("");
-    m_clockGauge->setFixedHeight(220);
+    m_clockGauge->setFixedHeight(300);
+    clockLay->addStretch(1);
     clockLay->addWidget(m_clockGauge);
-
-    // Calendar widget to the right of clock
-    m_calendar = new QCalendarWidget();
-    m_calendar->setMinimumWidth(180);
-    m_calendar->setStyleSheet(
-        "QCalendarWidget {"
-        "  background: #2a1208;"
-        "  border: 1px solid #555;"
-        "  font-size: 10pt;"
-        "}"
-        "QCalendarWidget::weekday-header {"
-        "  background: #40301a;"
-        "  color: #e8c860;"
-        "  font-weight: bold;"
-        "  padding: 4px;"
-        "}"
-        "QCalendarWidget::day-number {"
-        "  color: #c8a050;"
-        "  font-weight: normal;"
-        "  padding: 4px;"
-        "}"
-        "QCalendarWidget::current-date {"
-        "  background: #b8860b;"
-        "  color: #2a1208;"
-        "  font-weight: bold;"
-        "}"
-        "QCalendarWidget::today {"
-        "  border: 2px solid #e8c860;"
-        "}"
-        "QCalendarWidget::navigation-bar {"
-        "  background: #b8860b;"
-        "  padding: 4px;"
-        "}"
-        "QCalendarWidget::button {"
-        "  background: #b8860b;"
-        "  border: 1px solid #c8a050;"
-        "  color: #2a1208;"
-        "  font-weight: bold;"
-        "  border-radius: 3px;"
-        "  padding: 2px 6px;"
-        "}"
-        "QCalendarWidget::button:hover {"
-        "  background: #d4a843;"
-        "  border: 1px solid #e8c860;"
-        "}"
-    );
-    clockLay->addWidget(m_calendar);
+    clockLay->addStretch(1);
 
     mainLayout->addWidget(clockRow);
 
@@ -237,44 +194,44 @@ void SystemMonitorV2::setupUI() {
     // Row 0: CPU & core
     m_cpuGauge = new SteamGauge("CPU", "%", 0, 100, 80);
     m_cpuGauge->setSubtitle("-- %");
-    m_cpuGauge->setFixedHeight(220);
+    m_cpuGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_cpuGauge, 0, 0);
 
     m_cpuTempGauge = new SteamGauge("CPU TEMP", "°C", 0, 100, 80);
     m_cpuTempGauge->setSubtitle("--°C");
-    m_cpuTempGauge->setFixedHeight(220);
+    m_cpuTempGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_cpuTempGauge, 0, 1);
 
     // RAM gauge uses dynamically detected total RAM for max/red-zone
     m_ramGauge = new SteamGauge("SYSTEM RAM", "GB", 0, m_ramTotalGB, m_ramTotalGB * 0.8);
     m_ramGauge->setSubtitle(QString("-- / %1 GB").arg(m_ramTotalGB, 0, 'f', 0));
-    m_ramGauge->setFixedHeight(220);
+    m_ramGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_ramGauge, 0, 2);
 
     m_chassisGauge = new SteamGauge("BOARD TEMP", "°C", 0, 50, 40);
     m_chassisGauge->setSubtitle("--°C");
-    m_chassisGauge->setFixedHeight(220);
+    m_chassisGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_chassisGauge, 0, 3);
 
     // Row 1: iGPU (Radeon 780M)
     m_gpuGauge = new SteamGauge("RADEON 780M", "%", 0, 100, 80);
     m_gpuGauge->setSubtitle("-- %");
-    m_gpuGauge->setFixedHeight(220);
+    m_gpuGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_gpuGauge, 1, 0);
 
-    m_igpuTempGauge = new SteamGauge("R780M TEMP", "°C", 0, 100, 80);
+    m_igpuTempGauge = new SteamGauge("780M TEMP", "°C", 0, 100, 80);
     m_igpuTempGauge->setSubtitle("--°C");
-    m_igpuTempGauge->setFixedHeight(220);
+    m_igpuTempGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_igpuTempGauge, 1, 1);
 
-    m_gpuVramGauge = new SteamGauge("R780M VRAM", "GB", 0, 2, 1.6);  // 2 GB shared VRAM, red at 80%
+    m_gpuVramGauge = new SteamGauge("780M VRAM", "GB", 0, 2, 1.6);  // 2 GB shared VRAM, red at 80%
     m_gpuVramGauge->setSubtitle("-- GB");
-    m_gpuVramGauge->setFixedHeight(220);
+    m_gpuVramGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_gpuVramGauge, 1, 2);
 
     m_nvmeTempGauge = new SteamGauge("NVMe TEMP", "°C", 0, 100, 80);
     m_nvmeTempGauge->setSubtitle("--°C");
-    m_nvmeTempGauge->setFixedHeight(220);
+    m_nvmeTempGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_nvmeTempGauge, 1, 3);
 
     // Row 2: Network + RAM sticks
@@ -283,24 +240,24 @@ void SystemMonitorV2::setupUI() {
         m_wanGauge->setBezelColor(QColor(30, 100, 200));
         m_wanGauge->setNeedleColor(QColor(80, 160, 255));
         m_wanGauge->setAnimDuration(0);   // instant — no lag on network speed
-        m_wanGauge->setFixedHeight(220);
+        m_wanGauge->setFixedHeight(225);
         gaugeGrid->addWidget(m_wanGauge, 2, 0);
 
     m_lanGauge = new SteamGauge("ETHERNET", "Mbps", 0, 1000, 800);
     m_lanGauge->setSubtitle("↓ --  ↑ --");
     m_lanGauge->setBezelColor(QColor(30, 100, 200));
     m_lanGauge->setNeedleColor(QColor(80, 160, 255));
-    m_lanGauge->setFixedHeight(220);
+    m_lanGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_lanGauge, 2, 1);
 
     m_dimmATempGauge = new SteamGauge("DIMM A", "°C", 0, 85, 68);
     m_dimmATempGauge->setSubtitle("--°C");
-    m_dimmATempGauge->setFixedHeight(220);
+    m_dimmATempGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_dimmATempGauge, 2, 2);
 
     m_dimmBTempGauge = new SteamGauge("DIMM B", "°C", 0, 85, 68);
     m_dimmBTempGauge->setSubtitle("--°C");
-    m_dimmBTempGauge->setFixedHeight(220);
+    m_dimmBTempGauge->setFixedHeight(225);
     gaugeGrid->addWidget(m_dimmBTempGauge, 2, 3);
 
     // Equal row/column stretch so gauges fill the form
@@ -315,14 +272,14 @@ void SystemMonitorV2::setupUI() {
     nvLay->setContentsMargins(0, 0, 0, 0);
     m_nvGpuGauge = new SteamGauge("LOCAL GPU", "%", 0, 100, 80);
     m_nvGpuGauge->setSubtitle("-- % / --°C");
-    m_nvGpuGauge->setFixedHeight(220);
+    m_nvGpuGauge->setFixedHeight(300);
     m_nvGpuGauge->setBezelColor(QColor(118, 185, 0));  // NVIDIA green
     m_nvGpuGauge->setNeedleColor(QColor(255, 255, 255));  // white needle
     nvLay->addWidget(m_nvGpuGauge);
 
     m_nvGpuTempGauge = new SteamGauge("LOCAL GPU TEMP", "°C", 0, 100, 80);
     m_nvGpuTempGauge->setSubtitle("--°C");
-    m_nvGpuTempGauge->setFixedHeight(220);
+    m_nvGpuTempGauge->setFixedHeight(300);
     m_nvGpuTempGauge->setBezelColor(QColor(118, 185, 0));
     m_nvGpuTempGauge->setNeedleColor(QColor(255, 255, 255));
     nvLay->addWidget(m_nvGpuTempGauge);
@@ -330,14 +287,14 @@ void SystemMonitorV2::setupUI() {
     // Token/TPS gauge placeholder to the right of NVIDIA
     m_nvTpsGauge = new SteamGauge("LLM TPS", "tps", 0, 100, 80);
     m_nvTpsGauge->setSubtitle("-- tokens/s");
-    m_nvTpsGauge->setFixedHeight(220);
+    m_nvTpsGauge->setFixedHeight(300);
     m_nvTpsGauge->setBezelColor(QColor(118, 185, 0));
     m_nvTpsGauge->setNeedleColor(QColor(255, 255, 255));
     nvLay->addWidget(m_nvTpsGauge);
 
     m_nvVramGauge = new SteamGauge("LOCAL VRAM", "GB", 0, 16, 12.8);
     m_nvVramGauge->setSubtitle("-- GB");
-    m_nvVramGauge->setFixedHeight(220);
+    m_nvVramGauge->setFixedHeight(300);
     m_nvVramGauge->setBezelColor(QColor(118, 185, 0));
     m_nvVramGauge->setNeedleColor(QColor(255, 255, 255));
     nvLay->addWidget(m_nvVramGauge);
@@ -480,9 +437,6 @@ void SystemMonitorV2::tick() {
     m_clockGauge->setSecondaryValue(min);                      // minute hand = amber secondary (65% length)
     m_clockGauge->setTertiaryValue(hour);                      // hour hand = gold tertiary (50% length)
 
-    // Highlight today's date on calendar
-    m_calendar->setSelectedDate(QDate::currentDate());
-
     // Agent Pikey TPS gauge
     m_nvTpsGauge->setValue(m_nvGpuTps);
     m_nvTpsGauge->setSubtitle(QString("%1 tokens/s").arg(m_nvGpuTps, 0, 'f', 1));
@@ -525,10 +479,12 @@ void SystemMonitorV2::readRAM() {
         QTextStream in(&f);
         QString line;
         while (in.readLineInto(&line)) {
-            if (line.startsWith("MemTotal:"))
-                total = line.section(' ', 1, 1).trimmed().toULongLong();
-            else if (line.startsWith("MemAvailable:"))
-                available = line.section(' ', 1, 1).trimmed().toULongLong();
+            auto parts = line.split(' ', Qt::SkipEmptyParts);
+            if (parts.size() < 2) continue;
+            if (parts[0] == "MemTotal:")
+                total = parts[1].toULongLong();
+            else if (parts[0] == "MemAvailable:")
+                available = parts[1].toULongLong();
         }
         if (total > 0) {
             double usedKb = static_cast<double>(total - available);

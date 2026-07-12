@@ -13,7 +13,6 @@
 #include <map>
 #include <QString>
 #include "SteamGauge.h"
-#include <QCalendarWidget>
 
 /// SysmonV2 — Steampunk analog-dial system monitor.
 class SystemMonitorV2 : public QMainWindow {
@@ -99,9 +98,6 @@ private:
     SteamGauge *m_dimmBTempGauge = nullptr;
     SteamGauge *m_chassisGauge = nullptr;
     SteamGauge *m_clockGauge = nullptr;
-
-    // ── Calendar widget ──
-    QCalendarWidget *m_calendar = nullptr;
     SteamGauge *m_nvTpsGauge = nullptr;  // tokens per second gauge
     SteamGauge *m_nvVramGauge = nullptr;
 
