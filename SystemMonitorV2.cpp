@@ -26,14 +26,8 @@
 SystemMonitorV2::SystemMonitorV2(QWidget *parent)
     : QMainWindow(parent)
 {
-    setupUI();
-    setupStyle();
-
-    m_tickTimer = new QTimer(this);
-    connect(m_tickTimer, &QTimer::timeout, this, &SystemMonitorV2::tick);
-    m_tickTimer->start(250);   // 250ms tick → 4 Hz refresh (well under 1/s)
-
-    // Read RAM total once at startup
+    // Read RAM total BEFORE setupUI() so the gauge scale uses the real
+    // installed total rather than the 64 GB fallback clamp.
     QFile fp("/proc/meminfo");
     if (fp.open(QFile::ReadOnly)) {
         QTextStream in(&fp);
@@ -48,6 +42,13 @@ SystemMonitorV2::SystemMonitorV2(QWidget *parent)
     }
     // Fallback to 64 GB if detection fails
     if (m_ramTotalGB <= 0.0) m_ramTotalGB = 64.0;
+
+    setupUI();
+    setupStyle();
+
+    m_tickTimer = new QTimer(this);
+    connect(m_tickTimer, &QTimer::timeout, this, &SystemMonitorV2::tick);
+    m_tickTimer->start(250);   // 250ms tick → 4 Hz refresh (well under 1/s)
 
     // Discover sensor device paths by chip name (robust across reboots)
     discoverSensors();
@@ -245,41 +246,39 @@ void SystemMonitorV2::setupUI() {
     gaugeGrid->addWidget(m_cpuTempGauge, 0, 1);
 
     // RAM gauge uses dynamically detected total RAM for max/red-zone
-    double ramMax = qMax(m_ramTotalGB, 64.0);
-    double ramRedZone = ramMax * 0.8;
-    m_ramGauge = new SteamGauge("RAM", "GB", 0, ramMax, ramRedZone);
-    m_ramGauge->setSubtitle("-- / 64 GB");
+    m_ramGauge = new SteamGauge("SYSTEM RAM", "GB", 0, m_ramTotalGB, m_ramTotalGB * 0.8);
+    m_ramGauge->setSubtitle(QString("-- / %1 GB").arg(m_ramTotalGB, 0, 'f', 0));
     m_ramGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_ramGauge, 0, 2);
 
-    m_chassisGauge = new SteamGauge("CHASSIS", "°C", 0, 50, 40);
+    m_chassisGauge = new SteamGauge("BOARD TEMP", "°C", 0, 50, 40);
     m_chassisGauge->setSubtitle("--°C");
     m_chassisGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_chassisGauge, 0, 3);
 
     // Row 1: iGPU (Radeon 780M)
-    m_gpuGauge = new SteamGauge("M780 PERF", "%", 0, 100, 80);
+    m_gpuGauge = new SteamGauge("RADEON 780M", "%", 0, 100, 80);
     m_gpuGauge->setSubtitle("-- %");
     m_gpuGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_gpuGauge, 1, 0);
 
-    m_igpuTempGauge = new SteamGauge("M780 TEMP", "°C", 0, 100, 80);
+    m_igpuTempGauge = new SteamGauge("R780M TEMP", "°C", 0, 100, 80);
     m_igpuTempGauge->setSubtitle("--°C");
     m_igpuTempGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_igpuTempGauge, 1, 1);
 
-    m_gpuVramGauge = new SteamGauge("M780 VRAM", "GB", 0, 2, 1.6);  // 2 GB shared VRAM, red at 80%
+    m_gpuVramGauge = new SteamGauge("R780M VRAM", "GB", 0, 2, 1.6);  // 2 GB shared VRAM, red at 80%
     m_gpuVramGauge->setSubtitle("-- GB");
     m_gpuVramGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_gpuVramGauge, 1, 2);
 
-    m_nvmeTempGauge = new SteamGauge("NVME TEMP", "°C", 0, 100, 80);
+    m_nvmeTempGauge = new SteamGauge("NVMe TEMP", "°C", 0, 100, 80);
     m_nvmeTempGauge->setSubtitle("--°C");
     m_nvmeTempGauge->setFixedHeight(220);
     gaugeGrid->addWidget(m_nvmeTempGauge, 1, 3);
 
     // Row 2: Network + RAM sticks
-    m_wanGauge = new SteamGauge("WAN", "Mbps", 0, 200, 160);
+    m_wanGauge = new SteamGauge("Wi-Fi", "Mbps", 0, 200, 160);
         m_wanGauge->setSubtitle("↓ --");
         m_wanGauge->setBezelColor(QColor(30, 100, 200));
         m_wanGauge->setNeedleColor(QColor(80, 160, 255));
@@ -287,7 +286,7 @@ void SystemMonitorV2::setupUI() {
         m_wanGauge->setFixedHeight(220);
         gaugeGrid->addWidget(m_wanGauge, 2, 0);
 
-    m_lanGauge = new SteamGauge("LAN", "Mbps", 0, 1000, 800);
+    m_lanGauge = new SteamGauge("ETHERNET", "Mbps", 0, 1000, 800);
     m_lanGauge->setSubtitle("↓ --  ↑ --");
     m_lanGauge->setBezelColor(QColor(30, 100, 200));
     m_lanGauge->setNeedleColor(QColor(80, 160, 255));
@@ -314,14 +313,14 @@ void SystemMonitorV2::setupUI() {
     auto *nvRow = new QWidget();
     auto *nvLay = new QHBoxLayout(nvRow);
     nvLay->setContentsMargins(0, 0, 0, 0);
-    m_nvGpuGauge = new SteamGauge("NVIDIA GEFORCE RTX 4060 Ti", "%", 0, 100, 80);
+    m_nvGpuGauge = new SteamGauge("LOCAL GPU", "%", 0, 100, 80);
     m_nvGpuGauge->setSubtitle("-- % / --°C");
     m_nvGpuGauge->setFixedHeight(220);
     m_nvGpuGauge->setBezelColor(QColor(118, 185, 0));  // NVIDIA green
     m_nvGpuGauge->setNeedleColor(QColor(255, 255, 255));  // white needle
     nvLay->addWidget(m_nvGpuGauge);
 
-    m_nvGpuTempGauge = new SteamGauge("NVIDIA TEMP", "°C", 0, 100, 80);
+    m_nvGpuTempGauge = new SteamGauge("LOCAL GPU TEMP", "°C", 0, 100, 80);
     m_nvGpuTempGauge->setSubtitle("--°C");
     m_nvGpuTempGauge->setFixedHeight(220);
     m_nvGpuTempGauge->setBezelColor(QColor(118, 185, 0));
@@ -329,14 +328,14 @@ void SystemMonitorV2::setupUI() {
     nvLay->addWidget(m_nvGpuTempGauge);
 
     // Token/TPS gauge placeholder to the right of NVIDIA
-    m_nvTpsGauge = new SteamGauge("NVIDIA TPS", "tps", 0, 100, 80);
+    m_nvTpsGauge = new SteamGauge("LLM TPS", "tps", 0, 100, 80);
     m_nvTpsGauge->setSubtitle("-- tokens/s");
     m_nvTpsGauge->setFixedHeight(220);
     m_nvTpsGauge->setBezelColor(QColor(118, 185, 0));
     m_nvTpsGauge->setNeedleColor(QColor(255, 255, 255));
     nvLay->addWidget(m_nvTpsGauge);
 
-    m_nvVramGauge = new SteamGauge("NVIDIA VRAM", "GB", 0, 16, 12.8);
+    m_nvVramGauge = new SteamGauge("LOCAL VRAM", "GB", 0, 16, 12.8);
     m_nvVramGauge->setSubtitle("-- GB");
     m_nvVramGauge->setFixedHeight(220);
     m_nvVramGauge->setBezelColor(QColor(118, 185, 0));
