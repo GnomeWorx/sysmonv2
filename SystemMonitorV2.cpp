@@ -404,8 +404,8 @@ void SystemMonitorV2::tick() {
     readNetwork();
     readIgpu();          // AMD Radeon 780M perf + VRAM
 
-    // NVIDIA GPU is read asynchronously via QProcess to avoid blocking
-        readNvidiaAsync();
+    // Local inference GPU (Radeon 780M) — same device as the top row
+    readNvidiaLocalGpu();
     // Agent Pikey TPS (real llama.cpp throughput)
     readTpsAsync();
 
@@ -672,34 +672,29 @@ void SystemMonitorV2::readNetwork() {
     prevRx[m_lanIface] = lanRx; prevTx[m_lanIface] = lanTx;
 }
 
-// ── NVIDIA GPU (async via nvidia-smi) ──────────────────────────
-void SystemMonitorV2::readNvidiaAsync() {
-    if (!m_nvidiaProc) {
-        m_nvidiaProc = new QProcess(this);
-        connect(m_nvidiaProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                this, [this](int, QProcess::ExitStatus) {
-                    QString out = QString::fromUtf8(m_nvidiaProc->readAllStandardOutput().trimmed());
-                    if (!out.isEmpty()) {
-                        QStringList parts = out.split(',');
-                        if (parts.size() >= 2) {
-                            m_nvGpuUsage = parts[0].trimmed().toDouble();
-                            m_nvGpuTemp  = parts[1].trimmed().toDouble();
-                        }
-                        if (parts.size() >= 3) {
-                            m_nvVramGB = parts[2].trimmed().toDouble() / 1024.0;  // MiB → GB
-                        }
-                    }
-                    m_nvidiaPending = false;
-                    m_nvidiaProc->deleteLater();
-                    m_nvidiaProc = nullptr;
-                });
-    }
-    if (!m_nvidiaPending) {
-        m_nvidiaPending = true;
-        m_nvidiaProc->start("nvidia-smi",
-            {"--query-gpu=utilization.gpu,temperature.gpu,memory.used",
-             "--format=csv,noheader,nounits"});
-    }
+// ── Local inference GPU = Radeon 780M (replaces dead nvidia-smi) ──
+void SystemMonitorV2::readNvidiaLocalGpu() {
+    if (m_igpuCardPath.isEmpty()) return;
+
+    // GPU utilisation % — same source as the top-row RADEON 780M gauge
+    QFile busy(m_igpuCardPath + "/gpu_busy_percent");
+    if (busy.open(QFile::ReadOnly))
+        m_nvGpuUsage = QString::fromUtf8(busy.readAll().trimmed()).toDouble();
+
+    // Junction temperature — same amdgpu hwmon the top row uses
+    m_nvGpuTemp = readTempC(m_igpuTempPath);
+
+    // VRAM + GTT used
+    auto readU64 = [this](const QString &rel) -> qulonglong {
+        QFile f(m_igpuCardPath + "/" + rel);
+        if (f.open(QFile::ReadOnly))
+            return QString::fromUtf8(f.readAll().trimmed()).toULongLong();
+        return 0;
+    };
+    qulonglong vramUsed = readU64("mem_info_vram_used");
+    qulonglong gttUsed  = readU64("mem_info_gtt_used");
+    if (vramUsed > 0 || gttUsed > 0)
+        m_nvVramGB = static_cast<double>(vramUsed + gttUsed) / 1073741824.0;
 }
 
 // ── llama.cpp TPS (async via measure_tps.py) ──────────────────

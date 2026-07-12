@@ -33,7 +33,7 @@ private:
     void setupUI();
     void setupStyle();
     void readCPU();
-    void readNvidiaAsync();
+    void readNvidiaLocalGpu();    // Radeon 780M (local inference GPU)
     void readIgpu();       // AMD Radeon 780M perf + VRAM
     void readRAM();
     void readSensors();
@@ -74,10 +74,6 @@ private:
     QString m_igpuCardPath;       // /sys/class/drm/cardN/device
     QString m_wanIface = "wlp2s0";
     QString m_lanIface = "enp1s0";
-
-    // NVIDIA async reading state
-    QProcess *m_nvidiaProc = nullptr;
-    bool m_nvidiaPending = false;
 
     // Agent Pikey TPS async reading state
     QProcess *m_tpsProc = nullptr;
