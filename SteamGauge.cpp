@@ -85,28 +85,11 @@ void SteamGauge::setValue(double val) {
         m_anim->start();
     }
 
-    // ── Red-zone shake ──
-    bool inRed = isInRedZone();
-    if (inRed && !m_wasInRed) {
-        emit enteredRedZone();
-        m_wasInRed = true;
-        m_shakeDuration = 600;     // shake for 600ms
-        m_shakeFrame = 0;
-        m_shakeTimer.start();
-    } else if (!inRed && m_wasInRed) {
-        emit exitedRedZone();
-        m_wasInRed = false;
-        m_shakeDuration = 0;
-        m_shakeTimer.stop();
-        m_shakeFrame = 0;
-    }
-
-    if (inRed && m_shakeDuration <= 0 && !m_shakeTimer.isActive()) {
-        // Continuous shake while staying in red (re-trigger after pause)
-        m_shakeDuration = 600;
-        m_shakeFrame = 0;
-        m_shakeTimer.start();
-    }
+    // Red-zone shake is intentionally removed — it was annoying.
+    m_wasInRed = false;
+    m_shakeDuration = 0;
+    m_shakeTimer.stop();
+    m_shakeFrame = 0;
 }
 
 void SteamGauge::setSecondaryValue(double val) {
@@ -141,28 +124,13 @@ void SteamGauge::paintEvent(QPaintEvent *) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setRenderHint(QPainter::SmoothPixmapTransform);
 
-    // ── Apply shake offset ──
-    double shakeX = 0, shakeY = 0;
-    if (m_shakeDuration > 0) {
-        // Rapid jitter: alternating offsets, fading over duration
-        double intensity = qBound(0.0, m_shakeDuration / 600.0, 1.0);
-        int pattern = (m_shakeFrame % 5);
-        switch (pattern) {
-            case 0: shakeX = -2.0 * intensity; shakeY = -1.5 * intensity; break;
-            case 1: shakeX =  2.0 * intensity; shakeY =  1.0 * intensity; break;
-            case 2: shakeX = -1.5 * intensity; shakeY =  2.0 * intensity; break;
-            case 3: shakeX =  1.5 * intensity; shakeY = -1.0 * intensity; break;
-            case 4: shakeX =  0.5 * intensity; shakeY =  0.5 * intensity; break;
-        }
-    }
-
     // ── Gauge rect (square, centered, padding for subtitle at bottom) ──
     int w = width();
     int h = height();
     int gaugeSize = qMin(w, h - 20);          // leave 20px for subtitle
     int gx = (w - gaugeSize) / 2;
     int gy = (h - 20 - gaugeSize) / 2;
-    QRectF gaugeRect(gx + shakeX, gy + shakeY, gaugeSize, gaugeSize);
+    QRectF gaugeRect(gx, gy, gaugeSize, gaugeSize);
 
     // ── Background — transparent (panel paints behind us) ──
     // The full-width wood panel background is painted by SystemMonitorV2.
@@ -236,13 +204,15 @@ void SteamGauge::drawBrassRing(QPainter &p, const QRectF &rect) {
     p.setPen(Qt::NoPen);
     p.drawEllipse(shadowRect);
 
-    // Centered gradient — no directional light source to avoid banding artefacts
+    // Light source: 1m above, 1m in front of CEM → upward offset
     double cx = rect.center().x();
     double cy = rect.center().y();
     double outerR = rect.width() / 2;
+    double lx = cx;
+    double ly = cy - outerR * 0.15;  // light focal point: 15% up from centre
 
-    // The brass ring itself: centered gradient for even shading
-    QRadialGradient rg(cx, cy, outerR);
+    // The brass ring itself: directional gradient from light source
+    QRadialGradient rg(lx, ly, outerR);
     if (m_bezelColor.isValid()) {
         // Custom bezel colour (e.g. NVIDIA green)
         int r = m_bezelColor.red(), g = m_bezelColor.green(), b = m_bezelColor.blue();
@@ -260,16 +230,16 @@ void SteamGauge::drawBrassRing(QPainter &p, const QRectF &rect) {
     p.setPen(Qt::NoPen);
     p.drawEllipse(rect);
 
-    // ── Inner bevel: chamfer ring between brass and dial face ──
-    QRectF innerRect = rect.adjusted(ringW, ringW, -ringW, -ringW);
-    QRadialGradient irg(cx, cy, innerRect.width() / 2);
+    // Inner bevel — chamfer ring between brass and dial face
+    QRectF innerRect2 = rect.adjusted(ringW, ringW, -ringW, -ringW);
+    QRadialGradient irg(lx, ly, innerRect2.width() / 2);
     irg.setColorAt(0.0, COLOR_PARCHMENT);
     irg.setColorAt(0.85, QColor(210, 190, 150));
     irg.setColorAt(0.95, QColor(160, 120, 60));
     irg.setColorAt(1.0, QColor(80, 50, 15));
     p.setBrush(irg);
     p.setPen(Qt::NoPen);
-    p.drawEllipse(innerRect);
+    p.drawEllipse(innerRect2);
 }
 
 void SteamGauge::drawClockBezel(QPainter &p, const QRectF &rect) {
@@ -317,8 +287,8 @@ void SteamGauge::drawDialFace(QPainter &p, const QRectF &rect) {
     double cy = faceRect.center().y();
 
     if (m_unit == "HMS") {
-        // Clock face — darker enamel dial to stand out from standard gauges
-        QRadialGradient fg(cx - faceRect.width() * 0.15, cy - faceRect.height() * 0.15,
+        // Clock face — darker enamel dial, light from above
+        QRadialGradient fg(cx, cy - faceRect.height() * 0.15,
                             faceRect.width() / 2);
         fg.setColorAt(0.0, QColor(220, 215, 200));
         fg.setColorAt(0.4, QColor(200, 195, 180));
@@ -335,8 +305,8 @@ void SteamGauge::drawDialFace(QPainter &p, const QRectF &rect) {
         return;
     }
 
-    // Parchment dial face with centered radial gradient
-    QRadialGradient fg(cx, cy, faceRect.width() / 2);
+    // Parchment dial face — light from above
+    QRadialGradient fg(cx, cy - faceRect.height() * 0.15, faceRect.width() / 2);
     fg.setColorAt(0.0, QColor(255, 252, 242));
     fg.setColorAt(0.5, QColor(252, 242, 222));
     fg.setColorAt(0.85, COLOR_PARCHMENT);
@@ -520,10 +490,9 @@ void SteamGauge::drawNeedle(QPainter &p, const QRectF &rect, double val, const Q
     needlePath.lineTo(b2x, b2y);
     needlePath.closeSubpath();
 
-    // ── Drop shadow: fixed light source 45° above-top-left ──
-    // Light from top-left → shadow casts down-right
+    // ── Drop shadow: light from above → shadow casts downward ──
     double shadowDist = 3.0;
-    double shadX = shadowDist;
+    double shadX = 0;
     double shadY = shadowDist;
     p.save();
     p.translate(shadX, shadY);
@@ -569,10 +538,10 @@ void SteamGauge::drawNeedle(QPainter &p, const QRectF &rect, double val, const Q
 }
 
 void SteamGauge::drawGlassOverlay(QPainter &p, const QRectF &rect) {
-    // Glass reflection: bright crescent at top-left
-    QRadialGradient gg(rect.left() + rect.width() * 0.3,
-                       rect.top() + rect.height() * 0.3,
-                       rect.width() * 0.6);
+    // Glass reflection: bright crescent at the top (light source above)
+    QRadialGradient gg(rect.center().x(),
+                       rect.top() + rect.height() * 0.2,
+                       rect.width() * 0.5);
     gg.setColorAt(0.0, QColor(255, 255, 255, 30));
     gg.setColorAt(0.5, QColor(255, 255, 255, 8));
     gg.setColorAt(1.0, QColor(255, 255, 255, 0));

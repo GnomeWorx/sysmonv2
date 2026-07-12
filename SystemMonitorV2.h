@@ -33,12 +33,13 @@ private:
     void setupUI();
     void setupStyle();
     void readCPU();
-    void readNvidia();
     void readNvidiaAsync();
+    void readIgpu();       // AMD Radeon 780M perf + VRAM
     void readRAM();
     void readSensors();
     void readNetwork();
-    void readAgentPikeyStats();
+    void readTpsAsync();       // real llama.cpp TPS via measure_tps.py
+    void discoverSensors();
 
     // ── Data ──
     double m_cpuUsage = 0.0;
@@ -49,6 +50,7 @@ private:
     double m_nvGpuUsage = 0.0;
     double m_nvGpuTemp = 0.0;
     double m_nvGpuTps = 0.0;  // tokens per second placeholder
+    double m_nvVramGB = 0.0;
     double m_nvmeTemp = 0.0;
     double m_igpuTemp = 0.0;
     double m_dimmATemp = 0.0;
@@ -62,6 +64,17 @@ private:
     double m_lanDown = 0.0;
     double m_lanUp = 0.0;
 
+    // Discovered sensor device paths (populated once at startup)
+    QString m_cpuTempPath;        // k10temp temp1_input
+    QString m_igpuTempPath;       // amdgpu temp1_input
+    QString m_nvmeTempPath;       // nvme temp1_input
+    QString m_dimmATempPath;      // first spd5118 temp1_input
+    QString m_dimmBTempPath;      // second spd5118 temp1_input
+    QString m_chassisTempPath;    // acpitz temp1_input
+    QString m_igpuCardPath;       // /sys/class/drm/cardN/device
+    QString m_wanIface = "wlp2s0";
+    QString m_lanIface = "enp1s0";
+
     // NVIDIA async reading state
     QProcess *m_nvidiaProc = nullptr;
     bool m_nvidiaPending = false;
@@ -72,16 +85,14 @@ private:
 
     unsigned long long m_prevIdle = 0, m_prevTotal = 0;
 
-    struct Conn { unsigned long long rx, tx; };
-    std::map<QString, Conn> m_prevConns;
     unsigned long long m_cumWanRx = 0, m_cumWanTx = 0;
-    unsigned long long m_cumLanRx = 0, m_cumLanTx = 0;
 
     // ── UI elements ──
     SteamGauge *m_cpuGauge = nullptr;
     SteamGauge *m_gpuGauge = nullptr;
     SteamGauge *m_gpuVramGauge = nullptr;
     SteamGauge *m_nvGpuGauge = nullptr;
+    SteamGauge *m_nvGpuTempGauge = nullptr;
     SteamGauge *m_wanGauge = nullptr;
     SteamGauge *m_lanGauge = nullptr;
     SteamGauge *m_ramGauge = nullptr;
@@ -90,13 +101,13 @@ private:
     SteamGauge *m_nvmeTempGauge = nullptr;
     SteamGauge *m_dimmATempGauge = nullptr;
     SteamGauge *m_dimmBTempGauge = nullptr;
-    SteamGauge *m_ethTempGauge = nullptr;
     SteamGauge *m_chassisGauge = nullptr;
     SteamGauge *m_clockGauge = nullptr;
 
     // ── Calendar widget ──
     QCalendarWidget *m_calendar = nullptr;
     SteamGauge *m_nvTpsGauge = nullptr;  // tokens per second gauge
+    SteamGauge *m_nvVramGauge = nullptr;
 
     // ── Timer ──
     QTimer *m_tickTimer = nullptr;
