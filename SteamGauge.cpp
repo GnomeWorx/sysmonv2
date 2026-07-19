@@ -107,6 +107,11 @@ void SteamGauge::setSubtitle(const QString &text) {
     update();
 }
 
+void SteamGauge::setTitle(const QString &text) {
+    m_title = text;
+    update();
+}
+
 void SteamGauge::setAnimatedValue(double v) {
     m_animatedValue = v;
     update();
@@ -380,35 +385,40 @@ void SteamGauge::drawTickMarks(QPainter &p, const QRectF &rect) {
 
     // ── Clock face (HMS unit) ──
     if (m_unit == "HMS") {
-        // Full 360° clock with 12 at top. m_degStart=90, m_degSpan=360
-        // Hours 1-12 spaced evenly: each = m_degStart + m_degSpan * (h/12)
+        // Full 360° clock with 12 at top.
+        // The 12 numerals scale with the dial size so they always fit neatly.
+        double d = rect.width();
+        double penW = qMax(1.0, d * 0.006);
+        int numFont = qMax(7, qRound(d * 0.05));   // numeral size ∝ dial
+        double halfW = d * 0.06;
+        double halfH = numFont * 0.65;
         for (int h = 1; h <= 12; ++h) {
             double frac = (double)h / 12.0;
             double angle = m_degStart + frac * m_degSpan;
             double rad = qDegreesToRadians(angle);
 
-            double hInner = outerR - rect.width() * 0.04;
+            double hInner = outerR - d * 0.04;
             double x1 = cx + outerR * qCos(rad);
             double y1 = cy + outerR * qSin(rad);
             double x2 = cx + hInner * qCos(rad);
             double y2 = cy + hInner * qSin(rad);
-            p.setPen(QPen(COLOR_ENGRAVED, 1.8));
+            p.setPen(QPen(COLOR_ENGRAVED, penW));
             p.drawLine(QPointF(x1, y1), QPointF(x2, y2));
 
-            double labelR = hInner - 10;
+            // Numerals sit just inside the ticks, on a circle that scales with d
+            double labelR = hInner - d * 0.07;
             double lx = cx + labelR * qCos(rad);
             double ly = cy + labelR * qSin(rad);
 
             p.setPen(COLOR_ENGRAVED);
             QFont f = font();
-            f.setPointSize(8);
+            f.setPointSize(numFont);
             f.setBold(true);
             p.setFont(f);
 
-            QRectF lr(lx - 10, ly - 7, 20, 14);
-            lr.moveCenter(QPointF(lx, ly));
+            QRectF lr(lx - halfW, ly - halfH, halfW * 2.0, halfH * 2.0);
             p.drawText(lr, Qt::AlignCenter, QString::number(h));
-            p.setPen(QPen(COLOR_ENGRAVED, 1.8));
+            p.setPen(QPen(COLOR_ENGRAVED, penW));
         }
         return;
     }
@@ -560,24 +570,28 @@ void SteamGauge::drawGlassOverlay(QPainter &p, const QRectF &rect) {
 
 void SteamGauge::drawTitle(QPainter &p, const QRectF &rect) {
     // Title on the dial face, ~1/3 down from top of the inner face.
-    // Rendered over up to two lines so long names (e.g. "SYSTEM RAM",
-    // "LOCAL GPU TEMP") stay readable and don't clip the dial.
+    // Supports up to 3 lines (explicit \n in the title string) for cases
+    // like "4060 Ti\nmodelname" on the TPS gauge.
     double ringW = rect.width() * RING_WIDTH_RATIO;
     QRectF faceRect = rect.adjusted(ringW + 4, ringW + 4, -(ringW + 4), -(ringW + 4));
 
     double cx = faceRect.center().x();
     double cy = faceRect.top() + faceRect.height() * 0.26;
 
-    // Split the title into two balanced lines on word boundaries.
-    QStringList words = m_title.split(' ');
-    QString line1, line2;
-    if (words.size() <= 1) {
-        line1 = m_title;
-    } else {
-        int mid = (words.size() + 1) / 2;   // upper line gets the longer half
-        line1 = words.mid(0, mid).join(" ");
-        line2 = words.mid(mid).join(" ");
+    // Build up to 3 lines: first try explicit \n, then word-split
+    QStringList lines = m_title.split('\n');
+    if (lines.size() == 1 && !m_title.contains('\n')) {
+        // No explicit newlines — fall back to word-balanced split
+        QStringList words = m_title.split(' ');
+        if (words.size() > 1) {
+            int mid = (words.size() + 1) / 2;
+            lines.clear();
+            lines << words.mid(0, mid).join(" ")
+                  << words.mid(mid).join(" ");
+        }
     }
+    // Clamp to 3 lines max
+    while (lines.size() > 3) lines.removeLast();
 
     QFont f = font();
     f.setPointSize(10);
@@ -586,59 +600,52 @@ void SteamGauge::drawTitle(QPainter &p, const QRectF &rect) {
     p.setFont(f);
     p.setPen(QPen(COLOR_GOLD_TEXT));
 
-    if (line2.isEmpty()) {
+    if (lines.size() == 1) {
         QRectF titleRect(cx - 70, cy - 9, 140, 18);
-        p.drawText(titleRect, Qt::AlignCenter, line1);
-    } else {
+        p.drawText(titleRect, Qt::AlignCenter, lines[0]);
+    } else if (lines.size() == 2) {
         QRectF l1Rect(cx - 70, cy - 18, 140, 16);
-        p.drawText(l1Rect, Qt::AlignCenter, line1);
+        p.drawText(l1Rect, Qt::AlignCenter, lines[0]);
         QRectF l2Rect(cx - 70, cy - 1, 140, 16);
-        p.drawText(l2Rect, Qt::AlignCenter, line2);
-    }
-
-    // Small unit text beneath the title on the dial face
-    if (m_unit != "HMS") {  // clock has no unit label needed
-        QFont uf = font();
-        uf.setPointSize(7);
-        uf.setBold(false);
-        p.setFont(uf);
-        p.setPen(QColor(160, 130, 60));
-        QRectF unitRect(cx - 60, cy + 16, 120, 14);
-        p.drawText(unitRect, Qt::AlignCenter, m_unit);
+        p.drawText(l2Rect, Qt::AlignCenter, lines[1]);
+    } else {
+        // 3-line title: line1 at same Y as 2-line title so "4060" aligns
+        QRectF l1Rect(cx - 70, cy - 18, 140, 14);
+        p.drawText(l1Rect, Qt::AlignCenter, lines[0]);
+        QRectF l2Rect(cx - 70, cy - 4, 140, 14);
+        p.drawText(l2Rect, Qt::AlignCenter, lines[1]);
+        QRectF l3Rect(cx - 70, cy + 10, 140, 14);
+        p.drawText(l3Rect, Qt::AlignCenter, lines[2]);
     }
 }
 
 void SteamGauge::drawSubtitle(QPainter &p, const QRectF &rect) {
     if (m_subtitle.isEmpty()) return;
 
+    double ringW = rect.width() * RING_WIDTH_RATIO;
+    QRectF faceRect = rect.adjusted(ringW + 4, ringW + 4, -(ringW + 4), -(ringW + 4));
+    double cx = faceRect.center().x();
+
+    // Shadow pass — offset down-right for depth
     QFont f = font();
     f.setPointSize(9);
     f.setBold(false);
     f.setLetterSpacing(QFont::AbsoluteSpacing, 0.5);
     p.setFont(f);
-    p.setPen(Qt::white);
-    // Subtle shadow for readability
     p.setPen(QColor(0, 0, 0, 180));
+    QRectF shadowRect(cx - 55, faceRect.top() + faceRect.height() * 0.75 - 16, 110, 40);
+    p.drawText(shadowRect, Qt::AlignHCenter | Qt::TextWordWrap, m_subtitle);
 
-    double ringW = rect.width() * RING_WIDTH_RATIO;
-    QRectF faceRect = rect.adjusted(ringW + 4, ringW + 4, -(ringW + 4), -(ringW + 4));
-    double cx = faceRect.center().x();
-    double cy = faceRect.top() + faceRect.height() * 0.72;
-
-    QRectF shadowRect(cx - 50, cy - 8, 100, 16);
-    p.drawText(shadowRect, Qt::AlignCenter, m_subtitle);
-
-    // Actual text in bright white
+    // Actual text in bright white, monospace
     QFont f2 = font();
     f2.setPointSize(9);
     f2.setBold(false);
     f2.setLetterSpacing(QFont::AbsoluteSpacing, 0.5);
-    // Use monospace for the value
     f2.setFamily("monospace");
     p.setFont(f2);
     p.setPen(QColor(255, 230, 160));
-    QRectF subRect(cx - 50, cy - 9, 100, 16);
-    p.drawText(subRect, Qt::AlignCenter, m_subtitle);
+    QRectF subRect(cx - 55, faceRect.top() + faceRect.height() * 0.75 - 17, 110, 40);
+    p.drawText(subRect, Qt::AlignHCenter | Qt::TextWordWrap, m_subtitle);
 }
 
 void SteamGauge::drawRivets(QPainter &p, const QRectF &rect) {

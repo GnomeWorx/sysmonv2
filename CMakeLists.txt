@@ -12,11 +12,13 @@ set(SOURCES
     main.cpp
     SystemMonitorV2.cpp
     SteamGauge.cpp
+    netmon_parser.cpp
 )
 
 set(HEADERS
     SystemMonitorV2.h
     SteamGauge.h
+    netmon_parser.h
 )
 
 add_executable(sysmonv2 ${SOURCES} ${HEADERS})
@@ -26,3 +28,7 @@ target_link_libraries(sysmonv2 PRIVATE Qt5::Widgets Qt5::Network)
 set(APP_COPYRIGHT "(c) GnomeWorx 2026")
 configure_file(Version.h.in ${CMAKE_CURRENT_BINARY_DIR}/Version.h)
 target_include_directories(sysmonv2 PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+# ── Tests ──
+enable_testing()
+add_subdirectory(tests)

@@ -1,753 +1,518 @@
-# SysmonV2 — Steampunk Analog Dial System Monitor
-## Complete Product Engineering Specification (PEC) for All Dials, Gauges & Board
+# SysmonV2 — Steampunk System Monitor
 
 **Version:** 2.0.0  
-**Date:** 2026-07-11  
-**Author:** GnomeWorx  
-**Target:** Linux (Qt5/C++17, SteamGauge custom widget)
+**Author:** GnomeWorx (c) 2026  
+**Stack:** C++17, Qt 5.15 (Widgets, Network, Test), CMake 3.16+  
+**Display:** X11 (XCB), offscreen-capable for CI  
+**Target:** Linux x86_64 with `/proc` filesystem
 
 ---
 
-## Table of Contents
-1. [Architecture Overview](#1-architecture-overview)
-2. [SteamGauge Widget Specification (Core Engine)](#2-steamgauge-widget-specification-core-engine)
-3. [Board Layout & Dashboard Specification](#3-board-layout--dashboard-specification)
-4. [Gauge Specifications (All 14 Dials)](#4-gauge-specifications-all-14-dials)
-   - [4.1 CPU Gauge — Usage (%)](#41-cpu-gauge--usage-)
-   - [4.2 CPU Temp Gauge — Temperature (°C)](#42-cpu-temp-gauge--temperature-°c)
-   - [4.3 RAM Gauge — Used GB](#43-ram-gauge--used-gb)
-   - [4.4 Chassis Temp Gauge — Temperature (°C)](#44-chassis-temp-gauge--temperature-°c)
-   - [4.5 M780 PERF Gauge — iGPU Usage (%)](#45-m780-perf-gauge--igpu-usage-)
-   - [4.6 M780 TEMP Gauge — iGPU Temperature (°C)](#46-m780-temp-gauge--igpu-temperature-°c)
-   - [4.7 M780 VRAM Gauge — VRAM Used (GB)](#47-m780-vram-gauge--vram-used-gb)
-   - [4.8 NVMe Temp Gauge — Temperature (°C)](#48-nvme-temp-gauge--temperature-°c)
-   - [4.9 WAN Gauge — Internet Speed (Mbps)](#49-wan-gauge--internet-speed-mbps)
-   - [4.10 LAN Gauge — Local Network Speed (Mbps)](#410-lan-gauge--local-network-speed-mbps)
-   - [4.11 DIMM A Temp Gauge — Temperature (°C)](#411-dimm-a-temp-gauge--temperature-°c)
-   - [4.12 DIMM B Temp Gauge — Temperature (°C)](#412-dimm-b-temp-gauge--temperature-°c)
-   - [4.13 Clock Gauge — 3-Hand Analog (HMS)](#413-clock-gauge--3-hand-analog-hms)
-   - [4.14 NVIDIA GPU Gauge — RTX 4060 Ti Usage + Temp](#414-nvidia-gpu-gauge--rtx-4060-ti-usage--temp)
-   - [4.15 NVIDIA TPS Gauge — Tokens Per Second](#415-nvidia-tps-gauge--tokens-per-second)
-5. [Data Sources & Collection Logic](#5-data-sources--collection-logic)
-6. [Visual Style & Colour Palette](#6-visual-style--colour-palette)
-7. [Animation & Interaction Specification](#7-animation--interaction-specification)
-8. [Build & Deployment](#8-build--deployment)
-9. [Revision History](#9-revision-history)
+## 1. Overview
+
+SysmonV2 is a fullscreen/desktop system monitor that displays real-time system metrics (CPU, RAM, GPU temperature, network throughput, disk I/O, process count, uptime) as **steampunk-style analog gauges** with brass rings, parchment dials, and riveted panels. It also includes a **12-hour analogue clock** with second/minute/hour hands.
+
+The window is styled to look like a brass instrument panel on dark wood. It has two modes:
+
+- **Attached** (default): the full panel is shown — title bar (pinned or scrollable), clock row, gauge grid, and copyright footer.
+- **Detached**: each gauge pops out into its own frameless floating window — usable as a small HUD widget.
+
+All telemetry is read from `/proc/stat`, `/proc/meminfo`, `/proc/net/dev`, `/sys/class/hwmon/*/temp*_input`, `/proc/diskstats`, `/proc/loadavg`, and `/proc/uptime`.
 
 ---
 
-## 1. Architecture Overview
+## 2. Quick-Start Build
 
-### 1.1 High-Level Structure
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ SystemMonitorV2 (QMainWindow)                                           │
-│ ┌─────────────────────────────────────────────────────────────────────┐ │
-│ │ WoodPanelWidget (central widget) — paints oak veneer background     │ │
-│ │ ┌─────────────────────────────────────────────────────────────────┐ │ │
-│ │ │ VBoxLayout (6px margins, 6px spacing)                           │ │ │
-│ │ │ ┌─────────────────────────────────────────────────────────────┐ │ │ │
-│ │ │ │ Title Bar — "THE CHRONOMETRIC ENGINE MONITOR" (brass plate) │ │ │ │
-│ │ │ └─────────────────────────────────────────────────────────────┘ │ │ │
-│ │ │ ┌─────────────────────────────────────────────────────────────┐ │ │ │
-│ │ │ │ Rivet Row (12 brass rivets across top)                      │ │ │ │
-│ │ │ └─────────────────────────────────────────────────────────────┘ │ │ │
-│ │ │ ┌─────────────────────────────────────────────────────────────┐ │ │ │
-│ │ │ │ Clock Row (HBoxLayout)                                      │ │ │ │
-│ │ │ │ ┌──────────────┐ ┌────────────────────────────────────────┐ │ │ │ │
-│ │ │ │ │ CLOCK GAUGE  │ │ CALENDAR WIDGET (QCalendarWidget)      │ │ │ │ │
-│ │ │ │ │ (220px high) │ │ (180px min width, steampunk styled)    │ │ │ │ │
-│ │ │ │ └──────────────┘ └────────────────────────────────────────┘ │ │ │ │
-│ │ │ └─────────────────────────────────────────────────────────────┘ │ │ │
-│ │ │ ┌─────────────────────────────────────────────────────────────┐ │ │ │
-│ │ │ │ Gauge Grid (QGridLayout 3×4, 5px spacing, equal stretch)   │ │ │ │
-│ │ │ │ Row 0: [CPU] [CPU TEMP] [RAM] [CHASSIS]                     │ │ │ │
-│ │ │ │ Row 1: [M780 PERF] [M780 TEMP] [M780 VRAM] [NVME TEMP]      │ │ │ │
-│ │ │ │ Row 2: [WAN] [LAN] [DIMM A] [DIMM B]                        │ │ │ │
-│ │ │ └─────────────────────────────────────────────────────────────┘ │ │ │
-│ │ │ ┌─────────────────────────────────────────────────────────────┐ │ │ │
-│ │ │ │ NVIDIA Row (HBoxLayout, full width)                         │ │ │ │
-│ │ │ │ [NVIDIA RTX 4060 Ti GAUGE] [NVIDIA TPS GAUGE]               │ │ │ │
-│ │ │ └─────────────────────────────────────────────────────────────┘ │ │ │
-│ │ │ ┌─────────────────────────────────────────────────────────────┐ │ │ │
-│ │ │ │ Bottom Rivet Row (12 brass rivets)                          │ │ │ │
-│ │ │ └─────────────────────────────────────────────────────────────┘ │ │ │
-│ │ └─────────────────────────────────────────────────────────────────┘ │ │
-│ └─────────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### 1.2 Window & Sizing
-| Property | Value |
-|----------|-------|
-| Minimum Size | 1200 × 1100 px |
-| Default Size | 1400 × 1200 px |
-| Window Title | "Chronometric Engine Monitor" |
-| Background | Oak veneer wood texture + dark stain overlay (#0f0803, α=200) |
-| Fullscreen | F11 toggle |
-
-### 1.3 Timer & Update Loop
-| Timer | Interval | Handler | Purpose |
-|-------|----------|---------|---------|
-| `m_tickTimer` | 250 ms | `tick()` | All sensor reads + gauge updates + clock sweep |
-
----
-
-## 2. SteamGauge Widget Specification (Core Engine)
-
-### 2.1 Class Definition
-```cpp
-class SteamGauge : public QWidget {
-    Q_OBJECT
-    Q_PROPERTY(double animatedValue READ animatedValue WRITE setAnimatedValue)
-```
-
-### 2.2 Constructor Parameters
-```cpp
-SteamGauge(
-    const QString &title,       // Gauge label (e.g., "CPU", "RAM")
-    const QString &unit,        // Unit suffix (e.g., "%", "°C", "GB", "HMS")
-    double minValue = 0.0,      // Scale minimum
-    double maxValue = 100.0,    // Scale maximum
-    double redThreshold = 80.0, // Red-zone start (top 1/5 of range by default)
-    QWidget *parent = nullptr
-)
-```
-
-### 2.3 Public API
-| Method | Purpose |
-|--------|---------|
-| `setValue(double)` | Primary value → animates needle |
-| `setSecondaryValue(double)` | Second needle (e.g., temp on CPU gauge) |
-| `setTertiaryValue(double)` | Third needle (e.g., hour hand on clock) |
-| `setSubtitle(QString)` | Bottom text (e.g., "42%  68°C") |
-| `setArc(double degStart, double degSpan)` | Override arc angles |
-| `setAnimDuration(int ms)` | Needle animation speed (0 = instant) |
-| `setNeedleBaseWidth(double ratio)` | Needle base width as fraction of gauge width |
-| `setBezelColor(QColor)` | Override brass bezel colour |
-| `setNeedleColor(QColor)` | Override primary needle colour |
-
-### 2.4 Visual Layers (Paint Order — Back to Front)
-1. **Outer drop shadow** (radial gradient, 60% opacity at centre)
-2. **Bezel ring** — brass (default) or custom colour, centered radial gradient
-3. **Inner chamfer bevel** — parchment→dark edge gradient
-4. **Dial face** — parchment radial gradient + concentric machined rings
-5. **Red zone arc** — translucent red band on outer track (top 1/5 of scale)
-6. **Tick marks** — major (10) + minor (50), engraved colour (#2a1f14)
-7. **Value labels** — at major ticks, 7pt engraved colour
-8. **Title** — gold text (#d4a843), 10pt bold, letter-spacing 1.5, at 28% down face
-9. **Unit label** — 7pt, muted gold, beneath title (hidden on clock)
-10. **Subtitle** — 9pt monospace, bright warm white (#ffe6a0), at 72% down face, with drop shadow
-11. **Primary needle** — crimson (#dc1e1e), tapered triangle, gradient 3D, drop shadow
-12. **Secondary needle** — amber (#c86414), 65% length (if enabled)
-13. **Tertiary needle** — gold (#b48c3c), 50% length (if enabled)
-14. **Centre hub** — brass radial gradient + centre screw
-15. **Glass overlay** — top-left crescent highlight + rim highlight
-16. **Corner rivets** — 4 brass dome rivets at gauge corners (drawn by gauge itself)
-
-### 2.5 Needle Animation
-- **Property animation** on `animatedValue` (QPropertyAnimation)
-- **Default duration:** 400 ms, `OutCubic` easing
-- **Instant mode:** `setAnimDuration(0)` → snaps immediately, no shake
-- **Red-zone shake:** When value enters red zone (≥ `redThreshold`):
-  - Emits `enteredRedZone()`
-  - 600 ms jitter: 30 ms timer, 5-pattern alternating offsets (±2px, ±1.5px)
-  - Intensity fades linearly over shake duration
-  - Continuous while in red zone (re-triggers after pause)
-  - Emits `exitedRedZone()` on exit
-
-### 2.6 Clock Bezel Variant (`unit == "HMS"`)
-- **Bezel:** Silver brushed metal (centered radial gradient, no directional banding)
-- **Dial face:** Darker enamel (warm gray radial gradient)
-- **Arc:** 360° (degStart=90, degSpan=360) — 12 at top
-- **Ticks:** 12 hour marks with numerals (1–12), longer inner extension
-- **No red zone** on clock
-- **Three needles:**
-  - Primary (seconds): Crimson, full length, continuous sweep
-  - Secondary (minutes): Amber, 65% length, continuous sweep
-  - Tertiary (hours): Gold, 50% length, continuous sweep
-- **Animation duration:** 0 ms (instant, driven by `tick()` directly)
-
-### 2.7 Constants
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `DEG_START` | 135° | Default arc start (bottom-left) |
-| `DEG_SPAN` | 270° | Default arc span (to bottom-right) |
-| `RING_WIDTH_RATIO` | 0.10 | Bezel width = 10% of gauge width |
-| `TICK_LONG_RATIO` | 0.035 | Major tick length |
-| `TICK_SHORT_RATIO` | 0.020 | Minor tick length |
-| `NEEDLE_LEN_RATIO` | 0.70 | Primary needle length |
-| `NEEDLE_WIDTH` | 2.5 px | Needle base width (absolute) |
-| Min gauge size | 120 × 140 px | `setMinimumSize()` |
-
-### 2.8 Colour Constants (SteamGauge.cpp)
-| Name | Hex | RGB | Use |
-|------|-----|-----|-----|
-| `COLOR_BRASS_LIGHT` | `#d4a843` | 212,168,67 | Brass highlight |
-| `COLOR_BRASS_MID` | `#b8860b` | 184,134,11 | Brass mid-tone |
-| `COLOR_BRASS_DARK` | `#8b5a00` | 139,90,0 | Brass shadow |
-| `COLOR_CRIMSON` | `#8b0000` | 139,0,0 | Red zone accent |
-| `COLOR_NEEDLE` | `#dc1e1e` | 220,30,30 | Primary needle |
-| `COLOR_PARCHMENT` | `#f5e6c8` | 245,230,200 | Dial face base |
-| `COLOR_RED_ZONE` | `#b42828` α=60 | 180,40,40,60 | Red zone arc |
-| `COLOR_WOOD` | `#1a1410` | 26,20,16 | Panel background |
-| `COLOR_RIVET` | `#c0a060` | 192,160,96 | Rivet domes |
-| `COLOR_GOLD_TEXT` | `#d4a843` | 212,168,67 | Title text |
-| `COLOR_ENGRAVED` | `#2a1f14` | 42,31,20 | Tick marks, labels |
-
----
-
-## 3. Board Layout & Dashboard Specification
-
-### 3.1 Grid Coordinates
-```
-Row 0 (stretch=1):  [CPU]      [CPU TEMP]  [RAM]    [CHASSIS]
-Row 1 (stretch=1):  [M780 PERF][M780 TEMP] [M780 VRAM][NVME TEMP]
-Row 2 (stretch=1):  [WAN]      [LAN]       [DIMM A] [DIMM B]
-
-Row 3 (NVIDIA row): [NVIDIA GPU GAUGE] [NVIDIA TPS GAUGE]  (HBoxLayout, equal stretch)
-```
-
-### 3.2 Gauge Configuration Table
-| Gauge | Title | Unit | Min | Max | Red Thresh | Bezel | Needle | Fixed Height |
-|-------|-------|------|-----|-----|------------|-------|--------|--------------|
-| CPU | "CPU" | "%" | 0 | 100 | 80 | Brass | Crimson | 220 |
-| CPU TEMP | "CPU TEMP" | "°C" | 0 | 100 | 80 | Brass | Crimson | 220 |
-| RAM | "RAM" | "GB" | 0 | 64 | 51.2 | Brass | Crimson | 220 |
-| CHASSIS | "CHASSIS" | "°C" | 0 | 50 | 40 | Brass | Crimson | 220 |
-| M780 PERF | "M780 PERF" | "%" | 0 | 100 | 80 | Brass | Crimson | 220 |
-| M780 TEMP | "M780 TEMP" | "°C" | 0 | 100 | 80 | Brass | Crimson | 220 |
-| M780 VRAM | "M780 VRAM" | "GB" | 0 | 2 | 1.6 | Brass | Crimson | 220 |
-| NVME TEMP | "NVME TEMP" | "°C" | 0 | 100 | 80 | Brass | Crimson | 220 |
-| WAN | "WAN" | "Mbps" | 0 | 200 | 160 | Blue (#1e64c8) | Blue (#50a0ff) | 220 |
-| LAN | "LAN" | "Mbps" | 0 | 1000 | 800 | Blue (#1e64c8) | Blue (#50a0ff) | 220 |
-| DIMM A | "DIMM A" | "°C" | 0 | 85 | 68 | Brass | Crimson | 220 |
-| DIMM B | "DIMM B" | "°C" | 0 | 85 | 68 | Brass | Crimson | 220 |
-| CLOCK | "CLOCK" | "HMS" | 0 | 60 | N/A | Silver | Crimson/Amber/Gold | 220 |
-| NVIDIA GPU | "NVIDIA GEFORCE RTX 4060 Ti" | "%" | 0 | 100 | 80 | Green (#76b900) | White | 220 |
-| NVIDIA TPS | "NVIDIA TPS" | "tps" | 0 | 1000 | 800 | Green (#76b900) | White | 220 |
-
-### 3.3 Title Bar
-- **Text:** "THE CHRONOMETRIC ENGINE MONITOR"
-- **Font:** 12pt, bold, small caps, letter-spacing 5px
-- **Colour:** `#e8c860` (warm gold)
-- **Background:** Brass plate gradient + 1px `#d4a843` border + drop shadow
-- **Rivets:** 12 brass rivets below title bar
-
-### 3.4 Calendar Widget
-- **Position:** Right of clock gauge (clock row)
-- **Min width:** 180px
-- **Style:** Dark brass (`#2a1208` bg, `#555` border, `#e8c860` headers, `#c8a050` days)
-- **Today highlight:** `#b8860b` bg, `#2a1208` text, bold
-- **Navigation bar:** `#b8860b` bg, `#2a1208` text
-
-### 3.5 Bottom Rivet Row
-- Identical to top rivet row (12 rivets)
-
----
-
-## 4. Gauge Specifications (All 14 Dials)
-
-### 4.1 CPU Gauge — Usage (%)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "CPU" |
-| **Unit** | "%" |
-| **Range** | 0 – 100 |
-| **Red Zone** | ≥ 80% (top 20%) |
-| **Data Source** | `/proc/stat` (first `cpu` line) |
-| **Formula** | `usage% = (1 - Δidle/Δtotal) × 100`<br>`total = user + nice + system + idle + iowait + irq + softirq`<br>`idle = idle + iowait` |
-| **Update Rate** | 250 ms (per tick) |
-| **Needle** | Primary: crimson, animated (400 ms) |
-| **Secondary** | None (CPU temp on separate gauge) |
-| **Subtitle Format** | `"XX%"` (integer) |
-| **Bezel** | Default brass |
-| **Red Zone Shake** | Yes (600 ms jitter on entry, continuous while ≥80%) |
-
-**Code Reference:** `SystemMonitorV2::readCPU()` (lines 450-473)
-
----
-
-### 4.2 CPU Temp Gauge — Temperature (°C)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "CPU TEMP" |
-| **Unit** | "°C" |
-| **Range** | 0 – 100 |
-| **Red Zone** | ≥ 80°C |
-| **Data Source** | `/sys/class/hwmon/hwmon<N>/temp1_input` where `name == "k10temp"` |
-| **Formula** | `temp°C = raw_millidegrees / 1000.0` |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"XX°C"` (integer) |
-| **Bezel** | Default brass |
-
-**Code Reference:** `SystemMonitorV2::readSensors()` (lines 519-524)
-
----
-
-### 4.3 RAM Gauge — Used GB
-| Property | Specification |
-|----------|---------------|
-| **Title** | "RAM" |
-| **Unit** | "GB" |
-| **Range** | 0 – 64 (hardcoded for 64 GB system) |
-| **Red Zone** | ≥ 51.2 GB (80% of 64) |
-| **Data Source** | `/proc/meminfo` → `MemTotal`, `MemAvailable` |
-| **Formula** | `used_GB = (MemTotal_kB - MemAvailable_kB) / 1,048,576`<br>`MemTotal` captured once at startup |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"X.X / 64 GB"` (1 decimal) |
-| **Bezel** | Default brass |
-
-**Code Reference:** `SystemMonitorV2::readRAM()` (lines 493-507), constructor captures `m_ramTotalGB`
-
----
-
-### 4.4 Chassis Temp Gauge — Temperature (°C)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "CHASSIS" |
-| **Unit** | "°C" |
-| **Range** | 0 – 50 |
-| **Red Zone** | ≥ 40°C (80% of range) |
-| **Data Source** | `/sys/class/hwmon/hwmon<N>/temp1_input` where `name == "acpitz"` |
-| **Formula** | `temp°C = raw / 1000.0` |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"XX°C"` |
-| **Bezel** | Default brass |
-
-**Code Reference:** `SystemMonitorV2::readSensors()` (lines 540-546)
-
----
-
-### 4.5 M780 PERF Gauge — iGPU Usage (%)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "M780 PERF" |
-| **Unit** | "%" |
-| **Range** | 0 – 100 |
-| **Red Zone** | ≥ 80% |
-| **Data Source** | `/sys/class/drm/card<N>/device/gpu_busy_percent` (AMD Radeon 780M) |
-| **Formula** | Direct read (0–100 integer) |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"XX%"` |
-| **Bezel** | Default brass |
-| **Fallback** | If file missing → 0% |
-
-**Code Reference:** `SystemMonitorV2::readNvidia()` — *Note: Despite function name, reads AMD iGPU busy percent*
-
----
-
-### 4.6 M780 TEMP Gauge — iGPU Temperature (°C)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "M780 TEMP" |
-| **Unit** | "°C" |
-| **Range** | 0 – 100 |
-| **Red Zone** | ≥ 80°C |
-| **Data Source** | `/sys/class/hwmon/hwmon<N>/temp1_input` where `name == "amdgpu"` |
-| **Formula** | `temp°C = raw / 1000.0` |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"XX°C"` |
-| **Bezel** | Default brass |
-
-**Code Reference:** `SystemMonitorV2::readSensors()` (lines 533-538)
-
----
-
-### 4.7 M780 VRAM Gauge — VRAM Used (GB)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "M780 VRAM" |
-| **Unit** | "GB" |
-| **Range** | 0 – 2 (2 GB shared VRAM for 780M) |
-| **Red Zone** | ≥ 1.6 GB (80% of 2 GB) |
-| **Data Source** | `/sys/class/drm/card<N>/device/mem_info_vram_total` + `mem_info_vram_used`<br>Plus `mem_info_gtt_total` + `mem_info_gtt_used` |
-| **Formula** | `vram_GB = (vram_used + gtt_used) / 1,073,741,824` (bytes → GB) |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"X.X GB"` (1 decimal) |
-| **Bezel** | Default brass |
-
-**Code Reference:** `SystemMonitorV2::readNvidia()` (AMD VRAM section)
-
----
-
-### 4.8 NVMe Temp Gauge — Temperature (°C)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "NVME TEMP" |
-| **Unit** | "°C" |
-| **Range** | 0 – 100 |
-| **Red Zone** | ≥ 80°C |
-| **Data Source** | `/sys/class/hwmon/hwmon<N>/temp1_input` where `name == "nvme"` |
-| **Formula** | `temp°C = raw / 1000.0` |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"XX°C"` |
-| **Bezel** | Default brass |
-
-**Code Reference:** `SystemMonitorV2::readSensors()` (lines 526-531)
-
----
-
-### 4.9 WAN Gauge — Internet Speed (Mbps)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "WAN" |
-| **Unit** | "Mbps" |
-| **Range** | 0 – 200 (scales for typical internet) |
-| **Red Zone** | ≥ 160 Mbps |
-| **Data Source** | `ss -i -t -n` (TCP connection stats) |
-| **Classification** | **WAN** = peer IP is **public** (not in private ranges) |
-| **Private Ranges** | `10.0.0.0/8`, `127.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `::1/128`, `fe80::/10`, `fc00::/7`, `fd00::/7` |
-| **Formula (per tick)** | `dRx = curr_rx - prev_rx`<br>`dTx = curr_tx - prev_tx`<br>`speed_Mbps = (bytes × 8 / 1,000,000) / 0.25` (250 ms interval) |
-| **Cumulative** | `m_cumWanRx += dRx`, `m_cumWanTx += dTx` (unsigned long long) |
-| **Update Rate** | 250 ms |
-| **Needles** | Primary (↓ down): blue `#50a0ff`, animated<br>Secondary (↑ up): blue `#50a0ff`, animated via `setSecondaryValue()` |
-| **Subtitle Format** | `"↓ X.XX  ↑ Y.YY"` (2 dp if <10, else 1 dp) |
-| **Bezel** | Custom blue `#1e64c8` |
-| **Needle Colour** | Custom blue `#50a0ff` |
-
-**Code Reference:** `SystemMonitorV2::readNetwork()` (lines 582-655)
-
----
-
-### 4.10 LAN Gauge — Local Network Speed (Mbps)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "LAN" |
-| **Unit** | "Mbps" |
-| **Range** | 0 – 1000 (1 Gbps LAN typical) |
-| **Red Zone** | ≥ 800 Mbps |
-| **Data Source** | `ss -i -t -n` (same as WAN) |
-| **Classification** | **LAN** = peer IP is **private** (see ranges above) |
-| **Formula** | Identical to WAN |
-| **Cumulative** | `m_cumLanRx`, `m_cumLanTx` |
-| **Update Rate** | 250 ms |
-| **Needles** | Primary (↓): blue `#50a0ff`<br>Secondary (↑): blue `#50a0ff` |
-| **Subtitle Format** | `"↓ X.XX  ↑ Y.YY"` |
-| **Bezel** | Custom blue `#1e64c8` |
-| **Needle Colour** | Custom blue `#50a0ff` |
-
-**Code Reference:** `SystemMonitorV2::readNetwork()` (lines 582-655)
-
----
-
-### 4.11 DIMM A Temp Gauge — Temperature (°C)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "DIMM A" |
-| **Unit** | "°C" |
-| **Range** | 0 – 85 |
-| **Red Zone** | ≥ 68°C (80% of 85) |
-| **Data Source** | `/sys/class/hwmon/hwmon<N>/temp1_input` where `name == "spd5118"` (first occurrence) |
-| **Formula** | `temp°C = raw / 1000.0` |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"XX°C"` |
-| **Bezel** | Default brass |
-| **Identification** | First `spd5118` hwmon found = DIMM A |
-
-**Code Reference:** `SystemMonitorV2::readSensors()` (lines 556-578)
-
----
-
-### 4.12 DIMM B Temp Gauge — Temperature (°C)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "DIMM B" |
-| **Unit** | "°C" |
-| **Range** | 0 – 85 |
-| **Red Zone** | ≥ 68°C |
-| **Data Source** | `/sys/class/hwmon/hwmon<N>/temp1_input` where `name == "spd5118"` (second occurrence) |
-| **Formula** | `temp°C = raw / 1000.0` |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: crimson, animated |
-| **Subtitle Format** | `"XX°C"` |
-| **Bezel** | Default brass |
-| **Identification** | Second `spd5118` hwmon found = DIMM B |
-
-**Code Reference:** `SystemMonitorV2::readSensors()` (lines 556-578)
-
----
-
-### 4.13 Clock Gauge — 3-Hand Analog (HMS)
-| Property | Specification |
-|----------|---------------|
-| **Title** | "CLOCK" |
-| **Unit** | "HMS" (special marker) |
-| **Range** | 0 – 60 (maps 0–59 sec, 0–59 min, 0–11 hr×5) |
-| **Red Zone** | None (clock) |
-| **Data Source** | `QTime::currentTime()` |
-| **Formulas** | `sec = second + msec/1000.0` (0–60 continuous)<br>`min = minute + sec/60.0` (0–60 continuous)<br>`hour = (hour % 12) * 5.0 + min/12.0` (0–60, maps 12h→60) |
-| **Needles** | **Primary (sec):** Crimson, 100% length, continuous sweep, instant (anim=0)<br>**Secondary (min):** Amber `#c86414`, 65% length<br>**Tertiary (hr):** Gold `#b48c3c`, 50% length |
-| **Bezel** | Silver (custom `drawClockBezel()`) |
-| **Ticks** | 12 hour numerals (1–12) at 30° intervals, 12 at top (90°) |
-| **Arc** | `setArc(90, 360)` — full circle, 12 at top |
-| **Subtitle** | Empty (time shown by hands) |
-| **Update Rate** | 250 ms (driven by `tick()`) |
-
-**Code Reference:** `SystemMonitorV2::tick()` (lines 434-440), `SteamGauge::drawClockBezel()`, `drawTickMarks()` (HMS branch)
-
----
-
-### 4.14 NVIDIA GPU Gauge — RTX 4060 Ti Usage + Temp
-| Property | Specification |
-|----------|---------------|
-| **Title** | "NVIDIA GEFORCE RTX 4060 Ti" |
-| **Unit** | "%" |
-| **Range** | 0 – 100 |
-| **Red Zone** | ≥ 80% |
-| **Data Source** | `nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits` |
-| **Formula** | Direct parse: `usage%`, `temp°C` |
-| **Update Rate** | 250 ms (blocking `QProcess`, 3 s timeout) |
-| **Needle** | Primary: **White** (`#ffffff`), animated (400 ms) |
-| **Subtitle Format** | `"XX% / YY°C"` (usage + temp combined) |
-| **Bezel** | Custom green `#76b900` (NVIDIA brand) |
-| **Needle Colour** | Custom white `#ffffff` |
-
-**Code Reference:** `SystemMonitorV2::readNvidia()` (lines 476-490), `tick()` updates (lines 377-382)
-
----
-
-### 4.15 NVIDIA TPS Gauge — Tokens Per Second
-| Property | Specification |
-|----------|---------------|
-| **Title** | "NVIDIA TPS" |
-| **Unit** | "tps" |
-| **Range** | 0 – 1000 |
-| **Red Zone** | ≥ 800 |
-| **Data Source** | `/tmp/agent_pikey_stats.txt` (placeholder) |
-| **Formula** | File contains single number: tokens/second |
-| **Update Rate** | 250 ms |
-| **Needle** | Primary: **White** (`#ffffff`), animated |
-| **Subtitle Format** | `"X.X tokens/s"` (1 decimal) |
-| **Bezel** | Custom green `#76b900` |
-| **Needle Colour** | Custom white `#ffffff` |
-| **Status** | Placeholder — reads 0 if file missing |
-
-**Code Reference:** `SystemMonitorV2::readAgentPikeyStats()` (lines 658-676), `tick()` updates (lines 446-447)
-
----
-
-## 5. Data Sources & Collection Logic
-
-### 5.1 `/proc/stat` — CPU Usage
-```cpp
-// Read first line starting with "cpu "
-// Fields: user nice system idle iowait irq softirq ...
-total = user + nice + system + idle + iowait + irq + softirq
-idleTotal = idle + iowait
-usage% = (1.0 - (idle - prevIdle) / (total - prevTotal)) * 100.0
-```
-
-### 5.2 `/proc/meminfo` — RAM
-```cpp
-// Startup: read MemTotal once → m_ramTotalGB
-// Per tick: read MemAvailable
-used_GB = (MemTotal_kB - MemAvailable_kB) / 1048576.0
-```
-
-### 5.3 `/sys/class/hwmon/hwmon<N>/` — Temperatures
-| Sensor | hwmon `name` | File | Scale |
-|--------|--------------|------|-------|
-| CPU (k10temp) | `k10temp` | `temp1_input` | /1000 |
-| NVMe | `nvme` | `temp1_input` | /1000 |
-| iGPU (amdgpu) | `amdgpu` | `temp1_input` | /1000 |
-| Chassis (acpitz) | `acpitz` | `temp1_input` | /1000 |
-| Ethernet (r8169) | `r8169*` | `temp1_input` | /1000 |
-| DIMM A/B | `spd5118` (×2) | `temp1_input` | /1000 |
-
-Scan `hwmon0`–`hwmon9` each tick.
-
-### 5.4 `/sys/class/drm/card<N>/device/` — AMD iGPU (Radeon 780M)
-| Metric | File |
-|--------|------|
-| Usage % | `gpu_busy_percent` |
-| VRAM Total | `mem_info_vram_total` |
-| VRAM Used | `mem_info_vram_used` |
-| GTT Total | `mem_info_gtt_total` |
-| GTT Used | `mem_info_gtt_used` |
-
-VRAM GB = `(vram_used + gtt_used) / 1024^3`
-
-### 5.5 `ss -i -t -n` — Network (TCP connections)
-- Parse `ESTAB` lines + following info line
-- Extract `bytes_received:N` and `bytes_sent:N`
-- Key = `localAddr-peerAddr`
-- Delta per tick → classify by peer IP (private vs public)
-- Speed Mbps = `delta_bytes * 8 / 1e6 / 0.25`
-
-### 5.6 `nvidia-smi` — NVIDIA GPU
 ```bash
-nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits
+cd ~/sysmonv2
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
 ```
-Output: `XX, YY` → usage%, temp°C
 
-### 5.7 `/tmp/agent_pikey_stats.txt` — TPS (Placeholder)
-Single float: tokens per second. Currently returns 0.
+Build produces five binaries:
+
+| Binary | Description |
+|---|---|
+| `sysmonv2` | Main application |
+| `test_netmon` | Network parser unit tests (headless) |
+| `test_steamgauge` | SteamGauge widget tests (offscreen) |
+| `test_sysmonv2` | UI integration tests (offscreen) |
+
+Run tests:
+```bash
+cd ~/sysmonv2/build
+ctest --output-on-failure
+```
+
+Dependencies:
+- `qtbase5-dev`, `libqt5network5` (Ubuntu/Debian)
+- `g++` with C++17 support
 
 ---
 
-## 6. Visual Style & Colour Palette
+## 3. Architecture
 
-### 6.1 Wood Panel Background
-- **Texture:** `/home/sfarrant/oak_veneer_16x9_4k.jpg` (tiled)
-- **Overlay:** `rgba(15, 8, 3, 200)` — heavy dark stain
-- **Fallback:** Solid `#1e0e05` if texture missing
+### 3.1 Source File Map
 
-### 6.2 Title Bar Brass Plate
-```css
-background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-  stop:0 #8b6914, stop:0.3 #b8860b, stop:0.6 #a07010,
-  stop:0.85 #6b4e0a, stop:1 #3d2a06);
-border: 1px solid #d4a843;
-border-radius: 4px;
 ```
-- **Drop shadow:** 8px blur, offset (2,2), `rgba(0,0,0,120)`
-- **Text shadow:** 2px blur, offset (1,1), `rgba(0,0,0,100)`
-
-### 6.3 Rivets (Top & Bottom Rows)
-```css
-background: qradialgradient(cx:0.35,cy:0.35,radius:0.5,
-  fx:0.35,fy:0.35,
-  stop:0 #f0d080, stop:0.4 #c8a050,
-  stop:0.7 #8a6520, stop:1 #4a3510);
-border: 1px solid #3d2a06;
-border-radius: 5px;
+sysmonv2/
+├── CMakeLists.txt              # Root build — app + tests
+├── Version.h.in                # CMake-configured version template
+├── Specification.md            ← YOU ARE HERE
+├── main.cpp                    # Application entry point
+├── SystemMonitorV2.h           # Main window class declaration
+├── SystemMonitorV2.cpp         # Main window implementation (~500 lines)
+├── SteamGauge.h                # Steampunk gauge widget declaration
+├── SteamGauge.cpp              # Steampunk gauge widget implementation (~670 lines)
+├── netmon_parser.h             # /proc/net/dev parser (free function)
+├── netmon_parser.cpp           # Parser implementation (~23 lines)
+└── tests/
+    ├── CMakeLists.txt          # Test build — 3 executables
+    ├── test_netmon.cpp         # 12 test cases for netmon_parser
+    ├── test_steamgauge.cpp     # 23+ test cases for SteamGauge
+    └── test_sysmonv2_ui.cpp    # 15 test cases for SystemMonitorV2 integration
 ```
-- Size: 10×10 px, spaced 4 px apart, 12 per row
 
-### 6.4 Gauge Colour Assignments
-| Gauge Group | Bezel | Primary Needle | Secondary Needle |
-|-------------|-------|----------------|------------------|
-| CPU, RAM, Temps (CPU, NVMe, Chassis, DIMMs) | Brass | Crimson `#dc1e1e` | Amber `#c86414` (if used) |
-| M780 (iGPU) | Brass | Crimson | Amber |
-| WAN, LAN | Blue `#1e64c8` | Blue `#50a0ff` | Blue `#50a0ff` |
-| Clock | Silver (custom) | Crimson (sec) | Amber (min) / Gold (hr) |
-| NVIDIA GPU, TPS | Green `#76b900` | White `#ffffff` | — |
+### 3.2 Class Hierarchy
 
-### 6.5 Calendar Styling
-```css
-QCalendarWidget { background: #2a1208; border: 1px solid #555; }
-QCalendarWidget::weekday-header { background: #40301a; color: #e8c860; }
-QCalendarWidget::day-number { color: #c8a050; }
-QCalendarWidget::current-date { background: #b8860b; color: #2a1208; font-weight: bold; }
-QCalendarWidget::navigation-bar { background: #b8860b; }
-QCalendarWidget::button { background: #b8860b; color: #2a1208; }
+```
+QApplication (main.cpp)
+  └── SystemMonitorV2 : QWidget          # Main panel window
+        ├── titleLabel : QLabel           # Steampunk brass title
+        ├── subtitleLabel : QLabel        # Version/copyright
+        ├── copyrightLabel : QLabel       # Footer
+        ├── titleWidget : QWidget         # Container for title + version info
+        ├── clockRow : QWidget            # Holds the clock gauge
+        ├── gaugeGrid : QWidget           # Grid of 6+ gauges (2 cols × 3+ rows)
+        ├── rowCpu, rowGpu, rowNet, rowDisk, rowSys : QWidget  # Row containers
+        ├── detachBtn : QPushButton       # DETACH/ATTACH toggle
+        ├── m_gauges : QVector<SteamGauge*>  # All gauges
+        ├── m_cpuLoad, m_gpuTemp, ...     # Per-gauge pointers
+        ├── m_cpuPrevIdle, m_cpuPrevTotal  # Delta accumulators
+        ├── m_netPrev{Map}                # Network counters per iface
+        ├── m_diskPrev{Map}               # Disk counters per device
+        ├── m_timer : QTimer              # Main update tick (250ms)
+        ├── m_detached : bool             # Mode flag
+        └── m_detachedWindows : QVector<QWidget*>  # Floating gauge windows
+
+      SteamGauge : QWidget (N instances)  # Individual gauge widget
+        ├── m_title : QString             # Gauge name ("CPU LOAD")
+        ├── m_unit : QString              # Unit label ("%", "°C", "Mbps")
+        ├── m_subtitle : QString          # Live value text ("42%")
+        ├── m_minValue, m_maxValue : double
+        ├── m_redThreshold : double       # Value ≥ this = red zone
+        ├── m_value : double              # Clamped current value
+        ├── m_animatedValue : double      # QPropertyAnimation target
+        ├── m_secondaryValue : double     # Second needle value (-1 = disabled)
+        ├── m_tertiaryValue : double      # Third needle value (-1 = disabled)
+        ├── m_anim : QPropertyAnimation   # Needle sweep (400ms, OutCubic)
+        ├── m_shakeTimer : QTimer         # (Legacy — red-zone shake removed)
+        ├── m_wasInRed : bool             # (Legacy — always false now)
+        ├── m_cacheDirty : bool           # Resize invalidation flag
+        ├── m_degStart, m_degSpan : double  # Arc geometry (135°, 270°)
+        ├── m_needleBaseWidth : double    # Base width ratio (0.05)
+        ├── m_bezelColor : QColor         # Custom bezel (invalid = brass)
+        └── m_needleColor : QColor         # Custom needle (invalid = crimson)
+```
+
+### 3.3 Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ QTimer::tick()  (every 250ms)                                   │
+│   │                                                             │
+│   ├─ readCPU()       → /proc/stat          → cpuLoad gauge     │
+│   ├─ readRAM()       → /proc/meminfo       → ramUsed, ramAvail  │
+│   ├─ readGPUTemp()   → /sys/class/hwmon    → gpuTemp gauge     │
+│   ├─ readNetwork()   → /proc/net/dev + Δt  → wanMbps, lanMbps  │
+│   ├─ readDiskIO()    → /proc/diskstats + Δt→ diskRead, diskWrite│
+│   ├─ readUptime()    → /proc/uptime        → uptime gauge      │
+│   ├─ readProcs()     → /proc/loadavg       → procs gauge        │
+│   └─ updateClock()   → QTime::currentTime()→ clock gauge       │
+│                                                               │
+│   For each gauge: gauge->setValue(newVal)                      │
+│                  gauge->setSubtitle(formattedString)           │
+│                                                               │
+│   Detached mode: update floating gauge windows too             │
+└─────────────────────────────────────────────────────────────────┘
+
+CPU delta calculation:
+  idle = fields[4] (iowait excluded from modern Linux idle)
+  total = fields[1]+[2]+[3]+[4]+[5]+... (all fields summed)
+  diffIdle = idle - prevIdle
+  diffTotal = total - prevTotal
+  usage% = 100 * (1 - diffIdle/diffTotal)   [0% when diffTotal==0]
+
+Network throughput:
+  rxBytes(t), rxBytes(t-Δt) from /proc/net/dev per interface
+  mbPerSec = (rxΔ - txΔ) / 1_000_000 / Δt
+  wanMbps = min(mbPerSecToMbps(mbPerSec), 200)  # clamp to dial max
+  LAN uses a separate dial for secondary interface (enp1s0)
 ```
 
 ---
 
-## 7. Animation & Interaction Specification
+## 4. Gauge Layout
 
-### 7.1 Needle Animation
-- **All gauges except clock:** 400 ms `OutCubic` easing
-- **Clock:** 0 ms (instant) — driven directly by `tick()` math
-- **Red zone shake:** 600 ms, 30 ms frames, 5-pattern jitter, fades out
+### 4.1 Gauge Grid
 
-### 7.2 Clock Sweep (Continuous, Not Ticking)
+```
+┌─────────────────────────────────────────────────────┐
+│  [CLOCK]                 Detached gauges grid?      │
+├─────────────────────────────────────────────────────┤
+│  CPU LOAD     │  SYSTEM RAM       │  LOCAL GPU TEMP │
+│  [──–──–──]   │  [──–──–──]       │  [──–──–──]     │
+│  "42%"        │  "32.0 / 64.0 GB" │  "68°C"         │
+├───────────────┼───────────────────┼─────────────────┤
+│  WAN THROUGHP │  LAN THROUGHPUT   │  SYSTEM UPTIME  │
+│  [──–──–──]   │  [──–──–──]       │  [──–──–──]     │
+│  "12.5 Mbps"  │  "0.8 Mbps"       │  "3d 14h 22m"   │
+├───────────────┼───────────────────┼─────────────────┤
+│  DISK READ    │  DISK WRITE       │  PROCESS COUNT  │
+│  [──–──–──]   │  [──–──–──]       │  [──–──–──]     │
+│  "45 MB/s"    │  "12 MB/s"        │  "342"          │
+└─────────────────────────────────────────────────────┘
+```
+
+### 4.2 Gauge Specifications
+
+| Gauge | Unit | Range | Red Threshold | Bezel | Needle |
+|---|---|---|---|---|---|
+| CLOCK | HMS | 0–12 | n/a | Silver | Red (sec), Amber (min), Gold (hr) |
+| CPU LOAD | % | 0–100 | 80 | Brass (default) | Red |
+| SYSTEM RAM | GB | 0–64 | 50 | Brass | Red |
+| LOCAL GPU TEMP | °C | 0–120 | 90 | Brass (or NVIDIA green) | Red |
+| WAN THROUGHPUT | Mbps | 0–200 | 160 | Brass | Red |
+| LAN THROUGHPUT | Mbps | 0–200 | 160 | Brass | Red |
+| SYSTEM UPTIME | days | 0–365 | n/a | Brass | Red |
+| DISK READ | MB/s | 0–500 | 400 | Brass | Red |
+| DISK WRITE | MB/s | 0–500 | 400 | Brass | Red |
+| PROCESS COUNT | procs | 0–2000 | 1500 | Brass | Red |
+
+Note: The clock has three needles (second hand = primary, minute hand = secondary, hour hand = tertiary). The clock uses `setArc(135, 270)` for the 12-hour arc (bottom-left to bottom-right) with 12 numerals at the rim.
+
+---
+
+## 5. SteamGauge Widget API
+
+### 5.1 Public API
+
 ```cpp
-double sec = now.second() + now.msec() / 1000.0;      // 0–60 smooth
-double min = now.minute() + sec / 60.0;               // 0–60 smooth
-double hour = (now.hour() % 12) * 5.0 + min / 12.0;  // 0–60 (maps 12h→60)
-m_clockGauge->setValue(sec);           // Primary (seconds)
-m_clockGauge->setSecondaryValue(min);  // Secondary (minutes)
-m_clockGauge->setTertiaryValue(hour);  // Tertiary (hours)
+// Constructor
+SteamGauge(const QString &title,
+           const QString &unit,
+           double minValue = 0.0,
+           double maxValue = 100.0,
+           double redThreshold = 80.0,
+           QWidget *parent = nullptr);
+
+// Value — clamped to [min, max]
+void setValue(double val);
+double value() const;
+
+// Needle animation
+void setAnimDuration(int ms);  // 0 = instant snap, 400 = default
+double animatedValue() const;  // Q_PROPERTY for QPropertyAnimation
+
+// Multi-needle support
+void setSecondaryValue(double val);  // amber needle, 65% length
+void setTertiaryValue(double val);   // gold needle, 50% length
+
+// Labels
+void setSubtitle(const QString &text);  // live-value text on dial face
+
+// Arc geometry
+void setArc(double degStart, double degSpan);  // default: 135, 270
+
+// Styling
+void setBezelColor(const QColor &c);   // QColor() invalid = brass default
+void setNeedleColor(const QColor &c);  // QColor() invalid = crimson default
+void setNeedleBaseWidth(double ratio); // default 0.05 (fraction of gauge width)
+
+// Red zone
+bool isInRedZone() const;  // value >= redThreshold
 ```
 
-### 7.3 Fullscreen Toggle
-- **Key:** F11
-- **Action:** Toggle `showFullScreen()` / `showNormal()`
+### 5.2 Drawing Layers (bottom to top)
 
-### 7.4 Window Persistence
-- No `QSettings` persistence currently implemented
-- Fixed default size 1400×1200, minimum 1200×1100
+1. **Drop shadow** — radial gradient behind the gauge
+2. **Brass/silver bezel ring** — directional radial with inner bevel chamfer
+3. **Dial face** — parchment radial gradient with concentric metal rings
+4. **Red danger zone** — translucent red arc in the top ~20% of the sweep
+5. **Tick marks** — 10 major + 50 minor ticks with engraved-style int labels
+6. **Title + subtitle** — gold engraved text on the dial face
+7. **Needle(s)** — tapered triangle with gradient fill + dual drop shadows + hub/screw
+8. **Glass overlay** — white crescent reflection at top + edge highlight
+9. **Rivets** — 4 corner brass dots at panel edge
+
+### 5.3 Key Implementation Details
+
+- **Animation**: QPropertyAnimation on `animatedValue` property, duration 400ms, OutCubic easing. When `setAnimDuration(0)`, the needle snaps instantly with no animation.
+- **Red zone shake**: Historically had a shake timer animation when entering red zone. This was removed as "annoying" — `m_wasInRed` is always set to false and the shake timer is stopped immediately on every `setValue()` call. The `enteredRedZone`/`exitedRedZone` signal declarations remain in the header for API compatibility but are **never emitted**.
+- **Clock path**: When `m_unit == "HMS"`, the widget renders a silver bezel (instead of brass), an enamel dial face, and 12 hour numerals with tick marks. The three-needle system (second, minute, hour) is used.
+- **Minimum size**: `setMinimumSize(120, 140)` with `QSizePolicy::Expanding`.
 
 ---
 
-## 8. Build & Deployment
+## 6. SystemMonitorV2 Main Window
 
-### 8.1 CMakeLists.txt
+### 6.1 Constructor Flow
+
+1. `QWidget(nullptr)` — no parent, standalone window
+2. Set window title: `"Chronometric Engine Monitor v2.0.0"`
+3. Set window flags: frameless hint, stays-on-top hint
+4. Set attribute `Qt::WA_TranslucentBackground` — the window background is transparent; the wood panel is painted in `paintEvent()`
+5. **Read system info**: `/proc/meminfo` for total RAM (falls back to 64 GB if unavailable), network interface detection
+6. **Create layout**: vertical layout with:
+   - `titleWidget` (QLabel for "CHRONOMETRIC ENGINE MONITOR" + subtitle line)
+   - `clockRow` (clock + spacer)
+   - `gaugeGrid` (QGridLayout — 3 columns × 3 rows of gauges)
+   - `copyrightLabel` ("(c) GnomeWorx 2026  Version 2.0.0")
+7. **Create gauges**: 10 gauges per table in §4.2, with `setAnimDuration(250)` for smooth needle sweeps
+8. **Create DETACH button**: top-right corner of title widget
+9. **Connect timer**: `QTimer` at 250ms interval → `tick()`
+10. **Load persistent state**: `QSettings("Hermes", "sysmonv2")` — restores `detached` flag and `windowGeometry`
+11. **Set initial size**: `resize(1280, 800)` or restored geometry
+12. **Apply stylesheet**:
+    ```css
+    background: transparent;  // WA_TranslucentBackground handles this
+    QLabel#titleLabel { color: #d4a843; font-size: 28px; font-weight: bold; ... }
+    QPushButton { background: #2a1f14; color: #d4a843; border: 1px solid #8b5a00; ... }
+    ```
+
+### 6.2 tick() Pipeline (called every 250ms)
+
+```
+void SystemMonitorV2::tick() {
+    readCPU();        // parse /proc/stat → cpuLoad gauge
+    readRAM();        // parse /proc/meminfo → ramUsed, ramAvail gauges
+    readGPUTemp();    // scan /sys/class/hwmon → gpuTemp gauge
+    readNetwork();    // parse /proc/net/dev → wanMbps, lanMbps gauges
+    readDiskIO();     // parse /proc/diskstats → diskRead, diskWrite gauges
+    readUptime();     // parse /proc/uptime → uptime gauge
+    readProcs();      // parse /proc/loadavg → procs gauge
+    updateClock();    // QTime::currentTime() → clock gauge
+
+    // In detached mode: also update the floating gauge windows
+    if (m_detached) {
+        for (auto *w : m_detachedWindows)
+            w->update();
+    }
+}
+```
+
+### 6.3 Data Source Parsing Details
+
+**CPU** (`/proc/stat`):
+```
+cpu  user nice sys idle iowait irq softirq steal guest guest_nice
+```
+Parse fields [1]..[10], compute delta from previous read. If `diffTotal == 0`, usage stays at 0 (first tick guard).
+
+**RAM** (`/proc/meminfo`):
+```
+MemTotal:       64582344 kB
+MemFree:        3225600 kB
+MemAvailable:   48215392 kB
+...
+```
+Parse `MemTotal:` and `MemAvailable:` values. `usedGB = (total - avail) / 1048576.0`.
+
+**GPU Temp** (`/sys/class/hwmon/hwmon*/temp*_input`):
+- Scan all `hwmonN` directories for `temp*_input` files
+- Read value in millidegrees Celsius → divide by 1000
+- Match known GPU sensor names ("edge", "junction", or by hwmon label file)
+
+**Network** (`/proc/net/dev`):
+```
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo ...
+    lo:    1000      10 ...
+ wlp2s0: 12345678 ...
+```
+Use `parseProcNetDev()` free function. Store previous per-interface counters, compute delta over tick interval.
+
+**Disk I/O** (`/proc/diskstats`):
+```
+major minor name rio rmerge rsect ruse wio wmerge wsect wuse running use aveq
+```
+Parse sector counts (fields [5] and [9] — sectors read/written). One sector = 512 bytes. Compute delta over interval.
+
+**Uptime** (`/proc/uptime`):
+```
+123456.78  ...
+```
+First field = seconds since boot.
+
+**Process count** (`/proc/loadavg`):
+```
+0.42 0.31 0.25 2/345 12345
+```
+Parse the "2/345" field — the number after `/` is total processes.
+
+### 6.4 Detach/Attach Mode
+
+When **detach** is toggled:
+
+1. The main window hides all non-gauge rows (title, clock, copyright footer)
+2. The gauge grid rows are hidden
+3. Each gauge gets its own **frameless floating window** (`Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint`)
+4. Each floating window contains a single gauge widget at small size (~180×200px)
+5. The DETACH button text changes to "ATTACH"
+6. When re-attaching, the floating windows close and the main panel is restored
+7. The state is saved to `QSettings` and restored on next launch
+
+### 6.5 Keyboard Shortcuts
+
+| Key | Action |
+|---|---|
+| `F11` | Toggle fullscreen (one-shot, doesn't require a toggle function — just `if (isFullScreen()) showNormal(); else showFullScreen()`) |
+| `F10` | Toggle detach mode (programmatically clicks the detach button) |
+| `Escape` | Close window (if detached, re-attach first) |
+
+### 6.6 State Persistence
+
+Uses `QSettings("Hermes", "sysmonv2")` to persist across sessions:
+
+- **`windowGeometry`**: `saveGeometry()` / `restoreGeometry()` — window position and size
+- **`detached`**: boolean — whether the window was in detached mode when closed
+- **Save triggered**: on `closeEvent()` and whenever detach/attach is toggled
+
+### 6.7 Rendering
+
+The window has a **dark wood panel background** painted in `paintEvent()`:
+- Dark brown brushed wood texture: `QColor(26, 20, 16)` with subtle radial gradient
+- A `QRadialGradient` creates a vignette effect (lighter in center, darker at edges)
+- Small semi-transparent border: `QPen(QColor(60, 40, 15), 2)`
+
+---
+
+## 7. Network Parser (netmon_parser)
+
+### 7.1 Free Functions
+
+```cpp
+// Parse /proc/net/dev text → per-interface {rxBytes, txBytes}
+void parseProcNetDev(const QString &text,
+                     QMap<QString, QPair<unsigned long long, unsigned long long>> &out);
+
+// Convert MB/s to Mbps (multiply by 8)
+double mbPerSecToMbps(double mbPerSec);
+```
+
+### 7.2 Parsing Rules
+
+1. Split input on newlines, trim each line
+2. Find first `:` on each line — everything before = interface name (trimmed), everything after = counter fields
+3. Split counter part on whitespace (`\s+`) into parts array
+4. Need at least 9 fields (or it's malformed)
+5. `rx = parts[0].toULongLong()`, `tx = parts[8].toULongLong()`
+6. Lines without a colon are skipped (header lines)
+7. 64-bit unsigned values supported
+
+### 7.3 Test Coverage (12 tests)
+
+- All interfaces parsed
+- Correct rx/tx columns read
+- Header lines and malformed lines skipped
+- MB/s → Mbps conversion
+- End-to-end synthetic throughput calculation
+- Tab / irregular spacing
+- Zero counters
+- Empty input
+- Interface names with leading/trailing whitespace
+- Edge case: double colon in malformed iface name
+- 64-bit wrap values (near UINT64_MAX)
+
+---
+
+## 8. Build System
+
+### 8.1 Root `CMakeLists.txt`
+
 ```cmake
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.16)
 project(sysmonv2 VERSION 2.0.0 LANGUAGES CXX)
-
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
 
 find_package(Qt5 REQUIRED COMPONENTS Widgets Network)
 
-set(SOURCES
+# Version header from template
+configure_file(Version.h.in "${CMAKE_CURRENT_SOURCE_DIR}/Version.h")
+
+add_executable(sysmonv2
     main.cpp
     SystemMonitorV2.cpp
-    SystemMonitorV2.h
     SteamGauge.cpp
-    SteamGauge.h
+    netmon_parser.cpp
 )
+target_link_libraries(sysmonv2 PRIVATE Qt5::Widgets Qt5::Network)
 
-add_executable(sysmonv2 ${SOURCES})
-target_link_libraries(sysmonv2 Qt5::Widgets Qt5::Network)
+add_subdirectory(tests)
 ```
 
-### 8.2 Dependencies
-| Dependency | Purpose |
-|------------|---------|
-| Qt5 Widgets | GUI framework |
-| Qt5 Network | (Unused currently, but linked) |
-| `nvidia-smi` | NVIDIA GPU stats (runtime) |
-| `ss` (iproute2) | Network connection stats (runtime) |
-| `/sys/class/hwmon/`, `/sys/class/drm/`, `/proc/` | Kernel interfaces (runtime) |
+### 8.2 Test Build
 
-### 8.3 Build Commands
+See `tests/CMakeLists.txt` — three independent test executables, each with:
+- `find_package(Qt5 REQUIRED COMPONENTS Test Widgets Network)`
+- Their own source + required production sources
+- `enable_testing()` + `add_test()` for CTest registration
+
+**Running tests requires** either a display server (X11) or the offscreen platform:
 ```bash
-cd /home/sfarrant/sysmonv2
-mkdir -p build && cd build
-cmake ..
-make -j$(nproc)
-./sysmonv2
+QT_QPA_PLATFORM=offscreen ctest --output-on-failure
 ```
 
-### 8.4 Required Assets
-- `/home/sfarrant/oak_veneer_16x9_4k.jpg` — wood texture (must exist for full effect)
+---
+
+## 9. Known Limitations & Gotchas
+
+1. **Red zone signals never fire**: The `enteredRedZone`/`exitedRedZone` signals are declared in `SteamGauge.h` but the implementation in `setValue()` always sets `m_wasInRed = false` and never emits. The shake timer code is a dead codepath. (This was intentional — the red-zone shake was removed as annoying.)
+2. **GPU temp discovery is heuristic**: The code scans all `/sys/class/hwmon/hwmon*/temp*_input` files and picks the one matching "edge" or "junction" label. On multi-GPU systems or systems without AMD/nvidia kernel drivers loaded, this may return 0.
+3. **Network interface detection happens once at startup**: The first `readNetwork()` call picks the "primary" (wifi/ethernet) and "secondary" (ethernet) interfaces from the parsed `/proc/net/dev` output. Changing network interfaces after startup won't be picked up.
+4. **Detached mode window state is not individually positionable**: All detached windows share the same size; each is just a floating gauge widget.
+5. **No Wayland support**: Uses `Qt::WA_TranslucentBackground` + custom painting which works reliably only on X11.
+6. **Disk I/O uses 512-byte sectors**: The `/proc/diskstats` sector size is assumed to be 512 bytes (standard for most Linux block devices, but NVMe may report different units on some kernels).
 
 ---
 
-## 9. Revision History
+## 10. Modification Guide for Another AI
 
-| Date | Version | Author | Changes |
-|------|---------|--------|---------|
-| 2026-07-11 | 2.0.0 | GnomeWorx | Initial comprehensive PEC for sysmonv2 — all 14 gauges, SteamGauge engine, board layout, data sources, visual spec |
+### Adding a New Gauge
 
----
+1. Add a new `SteamGauge*` member to `SystemMonitorV2.h` (e.g., `m_batteryPercent`)
+2. Create the gauge in the constructor (choose appropriate min/max/redThreshold)
+3. Add it to `gaugeGrid` at the right `QGridLayout` position
+4. Create a `readBattery()` method that reads your data source
+5. Call it from `tick()` in `SystemMonitorV2.cpp`
+6. Add a test in `test_sysmonv2_ui.cpp`
 
-## Appendix A: Gauge Quick Reference Card
+### Changing Gauge Appearance
 
-| # | Gauge | Title | Unit | Range | Red @ | Source |
-|---|-------|-------|------|-------|-------|--------|
-| 1 | CPU | CPU | % | 0-100 | 80 | /proc/stat |
-| 2 | CPU Temp | CPU TEMP | °C | 0-100 | 80 | hwmon:k10temp |
-| 3 | RAM | RAM | GB | 0-64 | 51.2 | /proc/meminfo |
-| 4 | Chassis | CHASSIS | °C | 0-50 | 40 | hwmon:acpitz |
-| 5 | M780 Perf | M780 PERF | % | 0-100 | 80 | drm:gpu_busy_percent |
-| 6 | M780 Temp | M780 TEMP | °C | 0-100 | 80 | hwmon:amdgpu |
-| 7 | M780 VRAM | M780 VRAM | GB | 0-2 | 1.6 | drm:mem_info_vram+gtt |
-| 8 | NVMe | NVME TEMP | °C | 0-100 | 80 | hwmon:nvme |
-| 9 | WAN | WAN | Mbps | 0-200 | 160 | ss -i -t -n (public IP) |
-| 10 | LAN | LAN | Mbps | 0-1000 | 800 | ss -i -t -n (private IP) |
-| 11 | DIMM A | DIMM A | °C | 0-85 | 68 | hwmon:spd5118 (1st) |
-| 12 | DIMM B | DIMM B | °C | 0-85 | 68 | hwmon:spd5118 (2nd) |
-| 13 | Clock | CLOCK | HMS | 0-60 | — | QTime::currentTime() |
-| 14 | NVIDIA GPU | NVIDIA GEFORCE RTX 4060 Ti | % | 0-100 | 80 | nvidia-smi |
-| 15 | NVIDIA TPS | NVIDIA TPS | tps | 0-1000 | 800 | /tmp/agent_pikey_stats.txt |
+- **Bezel colour**: Call `gauge->setBezelColor(QColor(r, g, b))`. Invalid QColor = brass default.
+- **Needle colour**: Call `gauge->setNeedleColor(QColor(r, g, b))`. Invalid = crimson default.
+- **Arc sweep**: Call `gauge->setArc(startDeg, spanDeg)` for non-standard gauge arcs.
+- **Animation speed**: Call `gauge->setAnimDuration(ms)`. 0 = instant, 250–400 = smooth.
+
+### Adding a New Test
+
+1. Add a new slot to the relevant `Test` class
+2. Add the slot declaration in the `private slots:` section
+3. Use `QCOMPARE`, `QVERIFY`, `QSKIP` macros
+4. For UI tests: create a `SystemMonitorV2` (or `SteamGauge`), call methods, `QTest::qWait(ms)`, then assert
+5. If your test touches `/proc` or `/sys`, provide synthetic data (see `fakeProcStat()`, `fakeMemInfo()` helpers)
 
 ---
 
-**End of Specification**
+## 11. Style Conventions
+
+- **Naming**: `camelCase` for methods/vars, `m_` prefix for members, `k` prefix or `static constexpr` for constants
+- **Formatting**: K&R braces, 4-space indent, ~100 column limit
+- **Comments**: Doxygen-style `///` for public API, `// ── Section ──` separators
+- **Includes**: Grouped: own header, Qt, stdlib, project headers. Alphabetical within groups
+- **Dial colours**: All colour constants at the top of `SteamGauge.cpp` as `static const QColor`
+- **Avoid**: `Q_OBJECT` in non-widget classes, raw `new`/`delete` (Qt parent ownership), `std::*` containers where Qt equivalents exist

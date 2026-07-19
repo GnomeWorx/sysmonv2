@@ -9,6 +9,11 @@
 #include <QScrollArea>
 #include <QVector>
 #include <QJsonObject>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QPushButton>
+#include <QCloseEvent>
+#include <QSettings>
 #include <deque>
 #include <map>
 #include <QString>
@@ -27,18 +32,26 @@ private slots:
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    void moveEvent(QMoveEvent *event) override;
 
 private:
+    void saveState();
+    void loadState();
     void setupUI();
     void setupStyle();
     void readCPU();
-    void readNvidiaLocalGpu();    // Radeon 780M (local inference GPU)
+    void readNvidiaLocalGpu();    // RTX 4060 Ti via nvidia-smi
     void readIgpu();       // AMD Radeon 780M perf + VRAM
     void readRAM();
     void readSensors();
     void readNetwork();
-    void readTpsAsync();       // real llama.cpp TPS via measure_tps.py
+    void readTpsAsync();       // live llama.cpp TPS: auto-detect backend, probe directly
+    void discoverTpsEndpoint(); // find the local llama-server backend port once at startup
     void discoverSensors();
+    void setDetached(bool on);  // hide all rows except the NVIDIA/local-GPU row
+    void discoverNetworkIfaces();
 
     // ── Data ──
     double m_cpuUsage = 0.0;
@@ -48,7 +61,15 @@ private:
     double m_gpuVramGB = 0.0;
     double m_nvGpuUsage = 0.0;
     double m_nvGpuTemp = 0.0;
-    double m_nvGpuTps = 0.0;  // tokens per second placeholder
+    double m_nvGpuTps = 0.0;  // measured tokens/sec of the live local model
+
+    // ── Live local-LLM state (read from the running llama-server) ──
+    QString m_llmModel;       // model id reported by the live server (/v1/models)
+    bool m_tpsBusy = false;   // true while a probe request is in flight
+    int m_tpsProbeCounter = 0; // tick counter — probe every 20 ticks (~5s)
+    QString m_tpsApiUrl;      // auto-detected llama-server backend base URL
+    QString m_tpsApiKey;      // auto-detected API key (LM Studio sets one)
+    double m_tpsLastGood = 0.0; // sticky TPS — keep last good while probing
     double m_nvVramGB = 0.0;
     double m_nvmeTemp = 0.0;
     double m_igpuTemp = 0.0;
@@ -74,10 +95,6 @@ private:
     QString m_wanIface = "wlp2s0";
     QString m_lanIface = "enp1s0";
 
-    // Agent Pikey TPS async reading state
-    QProcess *m_tpsProc = nullptr;
-    bool m_tpsPending = false;
-
     unsigned long long m_prevIdle = 0, m_prevTotal = 0;
 
     unsigned long long m_cumWanRx = 0, m_cumWanTx = 0;
@@ -101,8 +118,24 @@ private:
     SteamGauge *m_nvTpsGauge = nullptr;  // tokens per second gauge
     SteamGauge *m_nvVramGauge = nullptr;
 
+    // ── Top-level layout rows (for detach/attach toggle) ──
+    QWidget *m_detachBar = nullptr;     // always-visible toolbar with the toggle button
+    QWidget *m_titleBar = nullptr;      // brass title plate row
+    QWidget *m_topRivetRow = nullptr;   // top rivet row
+    QWidget *m_clockRow = nullptr;      // clock row
+    QWidget *m_gaugeGridW = nullptr;    // wrapper holding the 3x4 gauge grid
+    QWidget *m_nvRow = nullptr;         // NVIDIA/local-GPU row (kept visible when detached)
+    QWidget *m_botRivetRow = nullptr;   // bottom rivet row
+    QPushButton *m_detachBtn = nullptr;
+    bool m_detached = false;
+
+#ifdef HERMES_VERIFY_FRIEND
+    friend class HermesVerifyDetach;
+#endif
+
     // ── Timer ──
     QTimer *m_tickTimer = nullptr;
+    QNetworkAccessManager *m_net = nullptr;
 };
 
 #endif // SYSTEMMONITORV2_H

@@ -29,6 +29,8 @@ public:
     void setSecondaryValue(double val);        ///< second needle (e.g. temp on CPU gauge)
     void setTertiaryValue(double val);         ///< third needle (e.g. hour hand on clock)
     void setSubtitle(const QString &text);     ///< e.g. "42%  68°C"
+    void setTitle(const QString &text);        ///< update gauge name dynamically
+    QString title() const { return m_title; }
     void setArc(double degStart, double degSpan); ///< override arc angles (default 135, 270)
     void setAnimDuration(int ms);         ///< set needle animation duration (0 = instant)
     void setNeedleBaseWidth(double ratio); ///< needle base width as ratio of gauge width (default 0.05)
