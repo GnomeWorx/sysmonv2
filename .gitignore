@@ -1,7 +1,21 @@
+# Build artifacts
+cmake-build-*/
 build/
-*.o
-*.o.d
-moc_*
-mocs_compilation.cpp
-qt_catch
+out/
+
+# IDE
+.idea/
+*.user
+*.kdev4
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Local runtime
+*.pid
